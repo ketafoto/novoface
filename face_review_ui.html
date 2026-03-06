@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gedface</title>
+<style>
+  /* ── Reset ── */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1117;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: #161822;
+    border-bottom: 1px solid #2a2d3a;
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    gap: 24px;
+  }
+  header h1 { font-size: 20px; font-weight: 600; color: #a5f3c4; flex-shrink: 0; }
+
+  .tabs { display: flex; height: 100%; }
+  .tab {
+    padding: 0 18px;
+    border: none;
+    background: transparent;
+    color: #6b6b8a;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s;
+    position: relative;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    height: 100%;
+  }
+  .tab:hover { color: #c0c0d0; }
+  .tab.active { color: #e0e0e0; border-bottom-color: #a5f3c4; }
+  .tab.has-update::after {
+    content: '';
+    width: 7px; height: 7px;
+    background: #a5f3c4;
+    border-radius: 50%;
+    position: absolute;
+    top: 14px; right: 8px;
+  }
+
+  .stats {
+    margin-left: auto;
+    display: flex;
+    gap: 20px;
+    font-size: 13px;
+    color: #8888aa;
+    flex-shrink: 0;
+  }
+  .stats span { color: #a5f3c4; font-weight: 600; }
+
+  /* ── Views ── */
+  .view { display: none; }
+  #view-scanner.active { display: block; overflow-y: auto; height: calc(100vh - 56px); }
+  #view-review.active  { display: flex;  height: calc(100vh - 56px); }
+
+  /* ── Scanner View ── */
+  .scanner-content {
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+  .card {
+    background: #161822;
+    border: 1px solid #2a2d3a;
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #a5f3c4;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 16px;
+  }
+
+  .folder-empty {
+    color: #4a4a6a;
+    font-size: 13px;
+    padding: 12px 0;
+  }
+  .folder-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    background: #1a1d2a;
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .folder-item .path {
+    flex: 1;
+    font-size: 13px;
+    font-family: 'Consolas', 'Cascadia Code', 'Monaco', monospace;
+    color: #c0c0d0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .folder-item .remove-btn {
+    background: transparent;
+    border: none;
+    color: #6b6b8a;
+    cursor: pointer;
+    padding: 2px 8px;
+    font-size: 20px;
+    line-height: 1;
+    font-family: inherit;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+  .folder-item .remove-btn:hover { color: #ff6b6b; background: rgba(255,107,107,0.1); }
+
+  .add-folder-row { display: flex; gap: 8px; margin-top: 12px; }
+  .add-folder-row input {
+    flex: 1;
+    padding: 9px 12px;
+    border: 1px solid #2a2d3a;
+    border-radius: 8px;
+    background: #1a1d2a;
+    color: #e0e0e0;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .add-folder-row input:focus { border-color: #a5f3c4; }
+  .add-folder-row input::placeholder { color: #4a4a6a; }
+  .add-folder-hint { font-size: 11px; color: #4a4a6a; margin-top: 8px; }
+
+  .settings-row { display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; }
+  .setting { display: flex; flex-direction: column; gap: 6px; }
+  .setting label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b6b8a;
+  }
+  .setting select,
+  .setting input[type="number"] {
+    padding: 7px 10px;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    background: #1a1d2a;
+    color: #e0e0e0;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+  .setting select:focus,
+  .setting input[type="number"]:focus { border-color: #a5f3c4; }
+
+  .tip-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #2a2d3a;
+    color: #8888aa;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: help;
+    margin-left: 5px;
+    vertical-align: middle;
+    position: relative;
+  }
+  .tip-icon:hover { background: #3a3d5a; color: #c0c0d0; }
+  .tip-icon .tip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 290px;
+    background: #1e2030;
+    border: 1px solid #3a3d5a;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 12px;
+    font-weight: 400;
+    color: #c0c0d0;
+    line-height: 1.5;
+    z-index: 50;
+    text-transform: none;
+    letter-spacing: 0;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .tip-icon .tip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: #3a3d5a;
+  }
+  .tip-icon:hover .tip { display: block; }
+  .tip .pro { color: #a5f3c4; }
+  .tip .con { color: #ff8888; }
+
+  .progress-section { margin-bottom: 20px; }
+  .progress-bar {
+    width: 100%;
+    height: 6px;
+    background: #2a2d3a;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #2a9d4e, #a5f3c4);
+    border-radius: 3px;
+    transition: width 0.5s ease;
+    width: 0;
+  }
+  .progress-fill.indeterminate {
+    width: 100% !important;
+    background: repeating-linear-gradient(
+      -45deg,
+      #2a9d4e 0, #2a9d4e 10px,
+      #3ab868 10px, #3ab868 20px
+    );
+    background-size: 28px 28px;
+    animation: stripe-move 0.8s linear infinite;
+  }
+  @keyframes stripe-move {
+    from { background-position: 0 0; }
+    to   { background-position: 28px 0; }
+  }
+  .progress-stats {
+    text-align: center;
+    font-size: 13px;
+    color: #8888aa;
+    margin-bottom: 4px;
+  }
+  .progress-stats span { color: #a5f3c4; font-weight: 600; }
+  .progress-file {
+    text-align: center;
+    font-size: 12px;
+    color: #5a5a7a;
+  }
+
+  .scan-btn-row { text-align: center; }
+  .scan-btn {
+    padding: 12px 36px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+    border: 1px solid;
+  }
+  .scan-btn.start {
+    background: #1a3a1a;
+    border-color: #2a6a2a;
+    color: #a5f3c4;
+  }
+  .scan-btn.start:hover { background: #2a5a2a; }
+  .scan-btn.stop {
+    background: #3a1a1a;
+    border-color: #6a2a2a;
+    color: #ff8888;
+  }
+  .scan-btn.stop:hover { background: #5a2a2a; }
+  .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .scan-done {
+    text-align: center;
+    color: #a5f3c4;
+    font-size: 14px;
+    padding: 14px;
+    background: #1a2e1a;
+    border-radius: 8px;
+    margin-top: 16px;
+  }
+  .scan-done a {
+    color: #a5f3c4;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .scan-error {
+    text-align: center;
+    color: #ff8888;
+    font-size: 14px;
+    padding: 14px;
+    background: #2e1a1a;
+    border-radius: 8px;
+    margin-top: 16px;
+    word-break: break-word;
+  }
+
+  /* ── Review View ── */
+  .sidebar {
+    width: 300px;
+    border-right: 1px solid #2a2d3a;
+    overflow-y: auto;
+    background: #13151f;
+    flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 12px 16px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #6b6b8a;
+    border-bottom: 1px solid #2a2d3a;
+    position: sticky;
+    top: 0;
+    background: #13151f;
+  }
+  .cluster-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid #1a1d2a;
+    transition: background 0.15s;
+  }
+  .cluster-item:hover { background: #1c1f2e; }
+  .cluster-item.active { background: #1e2a1e; border-left: 3px solid #a5f3c4; }
+  .cluster-item .thumb-stack {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: #2a2d3a;
+  }
+  .cluster-item .thumb-stack img { width: 100%; height: 100%; object-fit: cover; }
+  .cluster-item .info { flex: 1; min-width: 0; }
+  .cluster-item .name {
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cluster-item .name.unnamed { color: #6b6b8a; font-style: italic; }
+  .cluster-item .count { font-size: 12px; color: #6b6b8a; }
+
+  .main { flex: 1; overflow-y: auto; padding: 24px; }
+  .main-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #4a4a6a;
+    font-size: 16px;
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  .detail-header .field { display: flex; flex-direction: column; gap: 4px; }
+  .detail-header label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #6b6b8a;
+  }
+  .detail-header input {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #2a2d3a;
+    background: #1a1d2a;
+    color: #e0e0e0;
+    font-size: 14px;
+    outline: none;
+    font-family: inherit;
+  }
+  .detail-header input:focus { border-color: #a5f3c4; }
+  .detail-header input[type="text"] { width: 220px; }
+  .detail-header input[type="number"] { width: 90px; }
+
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid #2a2d3a;
+    background: #1a1d2a;
+    color: #e0e0e0;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn:hover { background: #252840; border-color: #a5f3c4; }
+  .btn-save { background: #1a3a1a; border-color: #2a6a2a; }
+  .btn-save:hover { background: #2a5a2a; }
+  .btn-merge { background: #3a1a1a; border-color: #6a2a2a; margin-left: auto; }
+  .btn-merge:hover { background: #5a2a2a; }
+
+  .face-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px;
+  }
+  .face-card {
+    background: #161822;
+    border-radius: 10px;
+    border: 1px solid #2a2d3a;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+  }
+  .face-card:hover { border-color: #a5f3c4; transform: translateY(-2px); }
+  .face-card:active { transform: translateY(0); }
+  .face-card img {
+    width: 100%;
+    aspect-ratio: 4/5;
+    object-fit: cover;
+    display: block;
+    background: #2a2d3a;
+  }
+  .face-card .meta { padding: 8px 10px; }
+  .face-card .date { font-size: 13px; font-weight: 600; color: #c0c0d0; }
+  .face-card .age { font-size: 12px; color: #a5f3c4; margin-left: 6px; }
+  .face-card .path {
+    font-size: 10px;
+    color: #5a5a7a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+
+  /* ── Toast ── */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: #1e3a1e;
+    border: 1px solid #2a6a2a;
+    color: #a5f3c4;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s;
+    pointer-events: none;
+    z-index: 200;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* ── Merge modal ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 150;
+  }
+  .modal {
+    background: #1a1d2a;
+    border: 1px solid #2a2d3a;
+    border-radius: 12px;
+    padding: 24px;
+    width: 400px;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  .modal h3 { margin-bottom: 16px; font-size: 16px; }
+  .modal .merge-target {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .modal .merge-target:hover { background: #252840; }
+  .modal .merge-target img {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>gedface</h1>
+  <nav class="tabs">
+    <button class="tab active" data-tab="scanner" onclick="switchTab('scanner')">Scanner</button>
+    <button class="tab" data-tab="review" onclick="switchTab('review')">Review</button>
+  </nav>
+  <div class="stats" id="stats"></div>
+</header>
+
+<!-- ── Scanner View ── -->
+<div id="view-scanner" class="view active">
+  <div class="scanner-content">
+    <div class="card">
+      <div class="card-title">Scan Folders</div>
+      <div id="folder-list"></div>
+      <div class="add-folder-row">
+        <input type="text" id="folder-input"
+               placeholder="Paste folder path, e.g. D:\Photos"
+               onkeydown="if(event.key==='Enter')addFolder()">
+        <button class="btn" onclick="addFolder()">Add</button>
+      </div>
+      <div class="add-folder-hint">All subfolders will be scanned recursively for photos.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Scan Settings</div>
+      <div class="settings-row">
+        <div class="setting">
+          <label>Detection size
+            <span class="tip-icon">?<span class="tip">
+              Resolution the model uses to find faces in each photo.<br><br>
+              <b>Higher (640):</b><br>
+              <span class="pro">+</span> Finds small and distant faces<br>
+              <span class="pro">+</span> Better for group / crowd photos<br>
+              <span class="con">&minus;</span> ~3&times; slower per image<br>
+              <span class="con">&minus;</span> Higher RAM usage<br><br>
+              <b>Lower (320):</b><br>
+              <span class="pro">+</span> Much faster processing<br>
+              <span class="con">&minus;</span> May miss small faces in the background
+            </span></span>
+          </label>
+          <select id="det-size">
+            <option value="320" selected>320 — fast</option>
+            <option value="640">640 — accurate (group photos)</option>
+          </select>
+        </div>
+        <div class="setting">
+          <label>Clustering threshold
+            <span class="tip-icon">?<span class="tip">
+              How similar two faces must be to be grouped as the same person. Range 0.1–0.8.<br><br>
+              <b>Higher (e.g. 0.50):</b><br>
+              <span class="pro">+</span> Fewer wrong matches<br>
+              <span class="con">&minus;</span> Same person may split into multiple clusters<br>
+              <span class="con">&minus;</span> More manual merging needed<br><br>
+              <b>Lower (e.g. 0.25):</b><br>
+              <span class="pro">+</span> Catches the same person across ages/angles<br>
+              <span class="con">&minus;</span> Different people may end up in one cluster<br><br>
+              Default <b>0.35</b> is a good starting point.
+            </span></span>
+          </label>
+          <input type="number" id="threshold" value="0.35" step="0.05" min="0.10" max="0.80">
+        </div>
+      </div>
+
+      <div id="progress-section" class="progress-section" style="display:none">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div id="progress-stats" class="progress-stats"></div>
+        <div id="progress-file" class="progress-file"></div>
+      </div>
+
+      <div class="scan-btn-row">
+        <button id="scan-btn" class="scan-btn start" onclick="startScan()">Start Scan</button>
+      </div>
+      <div id="scan-message"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Review View ── -->
+<div id="view-review" class="view">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">Clusters</div>
+  </div>
+  <div class="main" id="main">
+    <div class="main-empty">Select a cluster from the sidebar</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// Tab management
+// ═══════════════════════════════════════════════════════════════════════════
+
+let currentTab = 'scanner';
+let clustersLoaded = false;
+let reviewNeedsRefresh = false;
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + tab).classList.add('active');
+
+  if (tab === 'review') {
+    document.querySelector('[data-tab="review"]').classList.remove('has-update');
+    if (!clustersLoaded || reviewNeedsRefresh) {
+      reviewNeedsRefresh = false;
+      clusterFaces = {};
+      firstThumb = {};
+      loadClusters();
+    }
+  }
+  if (tab === 'scanner') {
+    loadFolders();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+function escJs(s) { return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const s = await r.json();
+    document.getElementById('stats').innerHTML =
+      `Photos: <span>${s.photos.toLocaleString()}</span> · ` +
+      `Faces: <span>${s.faces.toLocaleString()}</span> · ` +
+      `Clusters: <span>${s.clusters}</span> · ` +
+      `Named: <span>${s.named}</span>`;
+  } catch (e) {}
+}
+
+function formatEta(seconds) {
+  if (!seconds || seconds <= 0) return '\u2014';
+  if (seconds < 60) return seconds + 's';
+  if (seconds < 3600) return Math.round(seconds / 60) + ' min';
+  return (seconds / 3600).toFixed(1) + 'h';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scanner — folder management
+// ═══════════════════════════════════════════════════════════════════════════
+
+let folders = [];
+
+async function loadFolders() {
+  const r = await fetch('/api/scan/folders');
+  folders = await r.json();
+  renderFolders();
+  updateScanBtnState();
+}
+
+function renderFolders() {
+  const el = document.getElementById('folder-list');
+  if (folders.length === 0) {
+    el.innerHTML = '<div class="folder-empty">No folders added yet</div>';
+    return;
+  }
+  el.innerHTML = folders.map(f => `
+    <div class="folder-item">
+      <div class="path" title="${esc(f.folder_path)}">${esc(f.folder_path)}</div>
+      <button class="remove-btn" onclick="removeFolder(${f.id})" title="Remove">&times;</button>
+    </div>`).join('');
+}
+
+async function addFolder() {
+  const input = document.getElementById('folder-input');
+  const path = input.value.trim();
+  if (!path) return;
+
+  const r = await fetch('/api/scan/folders', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({folder_path: path}),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    showToast(data.error || 'Failed to add folder');
+    return;
+  }
+  input.value = '';
+  input.focus();
+  await loadFolders();
+  showToast('Folder added');
+}
+
+async function removeFolder(id) {
+  await fetch(`/api/scan/folders/${id}`, {method: 'DELETE'});
+  await loadFolders();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scanner — scan control & progress
+// ═══════════════════════════════════════════════════════════════════════════
+
+let scanEventSource = null;
+
+function connectSSE() {
+  if (scanEventSource) return;
+  scanEventSource = new EventSource('/api/scan/progress');
+  scanEventSource.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    updateScanUI(data);
+  };
+  scanEventSource.onerror = () => {
+    // EventSource auto-reconnects; nothing to do
+  };
+}
+
+async function startScan() {
+  const detSize = document.getElementById('det-size').value;
+  const threshold = document.getElementById('threshold').value;
+
+  const r = await fetch('/api/scan/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({det_size: parseInt(detSize), threshold: parseFloat(threshold)}),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    showToast(data.error || 'Failed to start');
+    return;
+  }
+  connectSSE();
+}
+
+async function stopScan() {
+  await fetch('/api/scan/stop', {method: 'POST'});
+}
+
+function updateScanBtnState() {
+  const btn = document.getElementById('scan-btn');
+  if (btn.classList.contains('start')) {
+    btn.disabled = folders.length === 0;
+  }
+}
+
+function updateScanUI(s) {
+  const btn = document.getElementById('scan-btn');
+  const progress = document.getElementById('progress-section');
+  const fill = document.getElementById('progress-fill');
+  const statsEl = document.getElementById('progress-stats');
+  const fileEl = document.getElementById('progress-file');
+  const msgEl = document.getElementById('scan-message');
+
+  if (s.status === 'idle') {
+    progress.style.display = 'none';
+    btn.textContent = 'Start Scan';
+    btn.className = 'scan-btn start';
+    btn.onclick = startScan;
+    btn.disabled = folders.length === 0;
+    msgEl.innerHTML = '';
+  } else if (s.status === 'loading_model') {
+    progress.style.display = 'block';
+    fill.className = 'progress-fill indeterminate';
+    statsEl.textContent = '';
+    fileEl.textContent = s.message;
+    btn.textContent = 'Loading model...';
+    btn.className = 'scan-btn start';
+    btn.disabled = true;
+    msgEl.innerHTML = '';
+  } else if (s.status === 'scanning') {
+    progress.style.display = 'block';
+    const pct = s.total > 0 ? ((s.current / s.total) * 100).toFixed(1) : 0;
+    fill.className = 'progress-fill';
+    fill.style.width = pct + '%';
+    statsEl.innerHTML =
+      `<span>${s.current}</span> / ${s.total} photos &middot; ` +
+      `<span>${s.faces_found}</span> faces &middot; ` +
+      `<span>${s.errors}</span> errors &middot; ` +
+      `${s.rate} img/s &middot; ETA: ${formatEta(s.eta_seconds)}`;
+    fileEl.textContent = s.current_file;
+    btn.textContent = 'Stop Scan';
+    btn.className = 'scan-btn stop';
+    btn.onclick = stopScan;
+    btn.disabled = false;
+    msgEl.innerHTML = '';
+  } else if (s.status === 'clustering') {
+    progress.style.display = 'block';
+    fill.className = 'progress-fill indeterminate';
+    statsEl.textContent = '';
+    fileEl.textContent = s.message;
+    btn.textContent = 'Clustering...';
+    btn.className = 'scan-btn start';
+    btn.disabled = true;
+    msgEl.innerHTML = '';
+  } else if (s.status === 'done') {
+    progress.style.display = 'block';
+    fill.className = 'progress-fill';
+    fill.style.width = '100%';
+    statsEl.textContent = '';
+    fileEl.textContent = '';
+    msgEl.innerHTML =
+      `<div class="scan-done">${esc(s.message)}<br>` +
+      `<a onclick="switchTab('review')">Go to Review &rarr;</a></div>`;
+    btn.textContent = 'Scan Again';
+    btn.className = 'scan-btn start';
+    btn.onclick = startScan;
+    btn.disabled = folders.length === 0;
+    loadStats();
+    reviewNeedsRefresh = true;
+    document.querySelector('[data-tab="review"]').classList.add('has-update');
+  } else if (s.status === 'error') {
+    progress.style.display = 'block';
+    fill.className = 'progress-fill';
+    fill.style.width = '0';
+    statsEl.textContent = '';
+    fileEl.textContent = '';
+    msgEl.innerHTML = `<div class="scan-error">${esc(s.message)}</div>`;
+    btn.textContent = 'Retry';
+    btn.className = 'scan-btn start';
+    btn.onclick = startScan;
+    btn.disabled = folders.length === 0;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Review — cluster list & detail
+// ═══════════════════════════════════════════════════════════════════════════
+
+let clusters = [];
+let activeCluster = null;
+let clusterFaces = {};
+let firstThumb = {};
+
+async function loadClusters() {
+  const r = await fetch('/api/clusters');
+  clusters = await r.json();
+
+  for (const c of clusters) {
+    if (!firstThumb[c.id] && c.face_count > 0) {
+      const fr = await fetch(`/api/clusters/${c.id}/faces`);
+      const faces = await fr.json();
+      clusterFaces[c.id] = faces;
+      if (faces.length > 0) firstThumb[c.id] = `/thumbs/${faces[0].thumb_path}`;
+    }
+  }
+  clustersLoaded = true;
+  renderSidebar();
+}
+
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  let html = '<div class="sidebar-header">Clusters</div>';
+  for (const c of clusters) {
+    const isActive = activeCluster && activeCluster.id === c.id;
+    const name = c.name || 'Unnamed';
+    const nameClass = c.name ? 'name' : 'name unnamed';
+    const thumb = firstThumb[c.id] || '';
+    html += `
+      <div class="cluster-item ${isActive ? 'active' : ''}"
+           onclick="selectCluster(${c.id})">
+        <div class="thumb-stack">
+          ${thumb ? `<img src="${thumb}" alt="">` : ''}
+        </div>
+        <div class="info">
+          <div class="${nameClass}">${esc(name)}</div>
+          <div class="count">${c.face_count} photo${c.face_count !== 1 ? 's' : ''}${c.birth_year ? ' \u00b7 b.' + c.birth_year : ''}</div>
+        </div>
+      </div>`;
+  }
+  sidebar.innerHTML = html;
+}
+
+async function selectCluster(id) {
+  activeCluster = clusters.find(c => c.id === id);
+  renderSidebar();
+  if (!clusterFaces[id]) {
+    const r = await fetch(`/api/clusters/${id}/faces`);
+    clusterFaces[id] = await r.json();
+  }
+  renderDetail();
+}
+
+function renderDetail() {
+  if (!activeCluster) return;
+  const c = activeCluster;
+  const faces = clusterFaces[c.id] || [];
+
+  let html = `
+    <div class="detail-header">
+      <div class="field">
+        <label>Person name</label>
+        <input type="text" id="inp-name" value="${esc(c.name || '')}"
+               placeholder="Enter name..." onkeydown="if(event.key==='Enter')saveCluster()">
+      </div>
+      <div class="field">
+        <label>Birth year</label>
+        <input type="number" id="inp-birth" value="${c.birth_year || ''}"
+               placeholder="e.g. 1947" min="1800" max="2030"
+               onkeydown="if(event.key==='Enter')saveCluster()">
+      </div>
+      <div class="field" style="justify-content:flex-end">
+        <label>&nbsp;</label>
+        <button class="btn btn-save" onclick="saveCluster()">Save</button>
+      </div>
+      <div class="field" style="justify-content:flex-end; margin-left:auto">
+        <label>&nbsp;</label>
+        <button class="btn btn-merge" onclick="showMergeModal()">Merge into...</button>
+      </div>
+    </div>
+    <div class="face-grid">`;
+
+  for (const f of faces) {
+    const year = f.photo_date ? f.photo_date.substring(0, 4) : '?';
+    let ageStr = '';
+    if (c.birth_year && f.photo_date) {
+      const photoYear = parseInt(f.photo_date.substring(0, 4));
+      if (!isNaN(photoYear)) ageStr = `age ~${photoYear - c.birth_year}`;
+    }
+    const shortPath = f.file_path.length > 50
+      ? '...' + f.file_path.slice(-47) : f.file_path;
+
+    html += `
+      <div class="face-card" onclick="copyPath('${escJs(f.file_path)}')"
+           title="Click to copy path:\n${esc(f.file_path)}">
+        <img src="/thumbs/${f.thumb_path}" alt="face" loading="lazy">
+        <div class="meta">
+          <span class="date">${year}</span>
+          ${ageStr ? `<span class="age">${ageStr}</span>` : ''}
+          <div class="path">${esc(shortPath)}</div>
+        </div>
+      </div>`;
+  }
+  html += '</div>';
+  document.getElementById('main').innerHTML = html;
+}
+
+async function saveCluster() {
+  if (!activeCluster) return;
+  const name = document.getElementById('inp-name').value.trim() || null;
+  const birthStr = document.getElementById('inp-birth').value.trim();
+  const birth_year = birthStr ? parseInt(birthStr) : null;
+
+  await fetch(`/api/clusters/${activeCluster.id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, birth_year}),
+  });
+  activeCluster.name = name;
+  activeCluster.birth_year = birth_year;
+  const idx = clusters.findIndex(c => c.id === activeCluster.id);
+  if (idx >= 0) clusters[idx] = {...clusters[idx], name, birth_year};
+  renderSidebar();
+  renderDetail();
+  loadStats();
+  showToast('Saved!');
+}
+
+function copyPath(filePath) {
+  navigator.clipboard.writeText(filePath).then(() => {
+    showToast('Path copied: ' + filePath.split('\\').pop());
+  });
+}
+
+function showMergeModal() {
+  if (!activeCluster) return;
+  const others = clusters.filter(c => c.id !== activeCluster.id);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  let items = '';
+  for (const c of others) {
+    const name = c.name || 'Unnamed';
+    const thumb = firstThumb[c.id] || '';
+    items += `
+      <div class="merge-target" onclick="doMerge(${activeCluster.id}, ${c.id})">
+        ${thumb ? `<img src="${thumb}" alt="">` : '<div style="width:32px;height:32px;border-radius:50%;background:#2a2d3a"></div>'}
+        <span>${esc(name)} (${c.face_count} photos)</span>
+      </div>`;
+  }
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Merge "${esc(activeCluster.name || 'Unnamed')}" into:</h3>
+      ${items || '<p style="color:#6b6b8a">No other clusters</p>'}
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function doMerge(sourceId, targetId) {
+  await fetch('/api/clusters/merge', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source_id: sourceId, target_id: targetId}),
+  });
+  document.querySelector('.modal-overlay')?.remove();
+  delete clusterFaces[sourceId];
+  delete clusterFaces[targetId];
+  activeCluster = null;
+  await loadClusters();
+  await loadStats();
+  selectCluster(targetId);
+  showToast('Clusters merged!');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function init() {
+  await loadStats();
+  await loadFolders();
+
+  const scanR = await fetch('/api/scan/status');
+  const scanData = await scanR.json();
+
+  if (['loading_model', 'scanning', 'clustering'].includes(scanData.status)) {
+    switchTab('scanner');
+    updateScanUI(scanData);
+    connectSSE();
+  } else {
+    const statsR = await fetch('/api/stats');
+    const stats = await statsR.json();
+    if (scanData.status !== 'idle') updateScanUI(scanData);
+    if (stats.faces > 0) {
+      switchTab('review');
+    } else {
+      switchTab('scanner');
+    }
+  }
+}
+
+init();
+</script>
+</body>
+</html>

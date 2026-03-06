@@ -1,0 +1,83 @@
+---
+description: gedface project — architecture, design decisions, current state, and planned work
+alwaysApply: true
+---
+
+# gedface — Face Recognition Tool for Genealogy Photos
+
+## Purpose
+Local tool to scan a large photo archive (~430 GB, 1920–2026), detect faces, cluster them
+by identity, and let the user name clusters and copy file paths. The output feeds into a
+separate GEDCOM genealogy app (at `C:\temp\gedcom.git`) where photos are uploaded per person.
+
+## Tech Stack
+- **Python 3.11** (Windows, Microsoft Store install)
+- **InsightFace 0.7.3** (`buffalo_l` model, ArcFace) — face detection + 512-dim embeddings
+- **onnxruntime** (CPU) — inference backend for InsightFace
+- **opencv-python-headless** — image loading/resizing
+- **Pillow** — EXIF extraction, thumbnail generation
+- **Flask** — local web UI server
+- **SQLite** (WAL mode) — `face_data/faces.db`
+
+## Database Schema (`face_data/faces.db`)
+
+**photos** — one row per processed image file (even if no faces found, to enable resume)
+- `id`, `file_path` (UNIQUE), `photo_date`, `date_source` (exif|path), `file_size`, `processed_at`
+
+**faces** — one row per detected face
+- `id`, `photo_id` (FK→photos), `face_index`, `top`, `right_`, `bottom`, `left_`
+- `encoding` (BLOB, 512×float32, L2-normalized), `thumb_path`, `cluster_id` (FK→clusters)
+
+**clusters** — one row per face group
+- `id`, `name` (NULL until user names it), `birth_year`, `merged_into` (for merge tracking)
+
+## Current File Structure
+```
+face_scan.py          — CLI scanner: walks archive, detects faces, computes embeddings, clusters
+face_review.py        — Flask server: serves API + static HTML for the review UI
+face_review_ui.html   — Single-page dark-themed UI (vanilla JS, no framework)
+requirements.txt      — Python dependencies
+face_data/            — runtime output (gitignored)
+  faces.db            — SQLite database
+  thumbs/             — 150px JPEG face crops (named {photo_id}_{face_index}.jpg)
+```
+
+## Key Design Decisions
+1. **InsightFace over dlib/face_recognition** — dlib requires CMake compilation on Windows; InsightFace has prebuilt wheels.
+2. **Greedy centroid clustering** — simple O(n×k) approach using cosine similarity (dot product on L2-normed embeddings). Threshold default 0.35.
+3. **Named clusters are preserved** across re-clustering runs. Only unnamed orphan clusters get cleaned up.
+4. **Scan is resumable** — photos table tracks processed files; re-running skips them.
+5. **Click-to-copy workflow** — clicking a face thumbnail copies its full `file_path` to clipboard, ready to paste into the genealogy app's file picker.
+6. **Dark UI theme** — colors: bg `#0f1117`, accent `#a5f3c4`, card `#161822`.
+
+## Current State (as of 2026-03-06)
+- All code is functional and tested end-to-end
+- Tested on 59 photos from the GEDCOM app media folder: 62 faces → 21 clusters
+- Processing speed: ~0.2 img/s on CPU (portrait photos); expect ~0.1–0.3 for mixed archive
+- Dependencies installed globally via pip (Python 3.11, no venv)
+- The InsightFace model (`buffalo_l`, ~300MB) is cached at `~/.insightface/models/`
+
+## Planned Work — Unified Web UI
+
+The current design requires running `face_scan.py` and `face_review.py` as separate CLI commands.
+This must be replaced with a **single unified web application** that the user launches once and
+controls entirely from the browser. Specific requirements:
+
+1. **Single entry point** — one command (or script) to start the app, opening the browser automatically
+2. **Folder selection in UI** — the user needs to select multiple independent archive folders to scan
+   (e.g., "processed photos until 2021" and "unprocessed photos since 2021" are in different directories)
+3. **Scan control from UI** — start/stop/monitor scan progress via the web interface, not the terminal
+4. **Live progress** — show scan progress (photos processed, faces found, ETA) in real-time in the browser
+5. **Scan + review in one app** — after scanning completes, the cluster review UI should be immediately
+   available without restarting anything
+
+The scan is CPU-intensive and long-running (potentially hours for 430GB). Consider:
+- Running scan in a background thread or subprocess
+- Using SSE or WebSocket for progress updates to the browser
+- Allowing the user to add folders incrementally (scan folder A, review, then scan folder B)
+
+## Environment Notes
+- OS: Windows 10 (build 26200), WSL Ubuntu 24.04 available as fallback
+- Python: 3.11 via Microsoft Store (`PythonSoftwareFoundation.Python.3.11`)
+- No virtual environment — packages installed globally
+- PowerShell is the default shell (not cmd)

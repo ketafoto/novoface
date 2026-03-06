@@ -1,0 +1,7 @@
+insightface
+onnxruntime
+opencv-python-headless
+Pillow
+numpy
+scikit-learn
+flask
