@@ -108,10 +108,13 @@ def extract_date(file_path: Path) -> tuple:
 
     path_str = str(file_path)
     current_year = datetime.now().year
-    year_matches = re.findall(r'\b(1[89]\d{2}|20[0-2]\d)\b', path_str)
+    # Find 4-digit years surrounded by non-digit chars (or string edges).
+    # Use the rightmost match — folder names like "Photos\2019\January" put
+    # the most specific year closest to the filename.
+    year_matches = re.findall(r'(?<!\d)(189\d|19\d{2}|20[0-3]\d|2040)(?!\d)', path_str)
     if year_matches:
         year = int(year_matches[-1])
-        if 1850 <= year <= current_year:
+        if 1890 <= year <= min(2040, current_year + 5):
             return f"{year}", "path"
 
     return None, None
