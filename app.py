@@ -129,6 +129,8 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
         known_hashes = dict(
             conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
         )
+        prev_photos = len(already)
+        prev_faces = conn.execute("SELECT COUNT(*) FROM faces").fetchone()[0]
 
         files = []
         for folder in folders:
@@ -142,11 +144,13 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
                         if str(full) not in already:
                             files.append(full)
 
-        total = len(files)
-        _scan.update(status="scanning", total=total,
-                     message=f"Scanning {total} new photos...")
+        new_count = len(files)
+        grand_total = prev_photos + new_count
+        _scan.update(status="scanning", total=grand_total, current=prev_photos,
+                     faces_found=prev_faces,
+                     message=f"Resuming: {new_count} new photos ({prev_photos} already done)...")
 
-        if total == 0:
+        if new_count == 0:
             _scan.update(status="clustering", message="No new photos. Re-clustering...")
             cluster_faces(conn, threshold)
             _scan.update(status="done",
@@ -154,25 +158,26 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
             conn.close()
             return
 
-        found = 0
+        found = prev_faces
         errs = 0
         t0 = time.time()
 
         for i, path in enumerate(files):
             if _scan_stop.is_set():
+                done_total = prev_photos + i
                 _scan.update(status="clustering",
-                             message=f"Stopped after {i}/{total}. Clustering...")
+                             message=f"Stopped after {done_total}/{grand_total}. Clustering...")
                 cluster_faces(conn, threshold)
                 _scan.update(status="done",
-                             message=f"Stopped. {i} photos processed, {found} faces clustered.")
+                             message=f"Stopped. {done_total} photos processed, {found} faces clustered.")
                 conn.close()
                 return
 
             elapsed = time.time() - t0
             rate = (i + 1) / elapsed if elapsed > 1 else 0
-            eta = (total - i - 1) / rate if rate > 0 else 0
+            eta = (new_count - i - 1) / rate if rate > 0 else 0
             spi = elapsed / (i + 1) if i > 0 else 0
-            _scan.update(current=i + 1, faces_found=found, errors=errs,
+            _scan.update(current=prev_photos + i + 1, faces_found=found, errors=errs,
                          rate=round(rate, 2), eta_seconds=round(eta),
                          elapsed_seconds=round(elapsed),
                          sec_per_img=round(spi, 1),
@@ -207,15 +212,15 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
 
             if (i + 1) % 200 == 0 and found > 0:
                 prev_msg = _scan["message"]
-                _scan["message"] = f"Interim clustering after {i + 1} photos..."
+                _scan["message"] = f"Interim clustering after {prev_photos + i + 1} photos..."
                 cluster_faces(conn, threshold)
                 _scan["message"] = prev_msg
 
-        _scan.update(current=total, faces_found=found, errors=errs,
+        _scan.update(current=grand_total, faces_found=found, errors=errs,
                      status="clustering", message="Final clustering...")
         cluster_faces(conn, threshold)
         _scan.update(status="done",
-                     message=f"Done! {total} photos processed, {found} faces clustered.")
+                     message=f"Done! {grand_total} photos processed, {found} faces clustered.")
         conn.close()
 
     except Exception as e:
