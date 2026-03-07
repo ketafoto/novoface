@@ -176,8 +176,14 @@ def _run_scan(folders, det_size, threshold):
                     pass
             _scan["photo_seconds"] = round(time.time() - photo_t0, 1)
 
+            if (i + 1) % 200 == 0 and found > 0:
+                prev_msg = _scan["message"]
+                _scan["message"] = f"Interim clustering after {i + 1} photos..."
+                cluster_faces(conn, threshold)
+                _scan["message"] = prev_msg
+
         _scan.update(current=total, faces_found=found, errors=errs,
-                     status="clustering", message="Clustering faces...")
+                     status="clustering", message="Final clustering...")
         cluster_faces(conn, threshold)
         _scan.update(status="done",
                      message=f"Done! {total} photos processed, {found} faces clustered.")
@@ -191,7 +197,9 @@ def _run_scan(folders, det_size, threshold):
 
 @app.route("/")
 def index():
-    return send_file("face_review_ui.html")
+    resp = send_file("face_review_ui.html")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
 
 
 @app.route("/thumbs/<path:filename>")
@@ -376,6 +384,35 @@ def api_stats():
     }
     conn.close()
     return jsonify(result)
+
+
+@app.route("/api/scan/pending")
+def scan_pending():
+    """Count unprocessed photos and detect data from outside current folders."""
+    conn = get_db()
+    rows = conn.execute("SELECT folder_path FROM scan_folders").fetchall()
+    all_photos = [r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()]
+    conn.close()
+
+    folder_prefixes = [row["folder_path"] for row in rows]
+    already = set(all_photos)
+
+    orphan = 0
+    for p in all_photos:
+        if not any(p.startswith(fp) for fp in folder_prefixes):
+            orphan += 1
+
+    pending = 0
+    for row in rows:
+        fp = Path(row["folder_path"])
+        if not fp.is_dir():
+            continue
+        for root, _, names in os.walk(fp):
+            for name in names:
+                if Path(name).suffix.lower() in PHOTO_EXTENSIONS:
+                    if str(Path(root) / name) not in already:
+                        pending += 1
+    return jsonify({"pending": pending, "orphan": orphan})
 
 
 @app.route("/api/clusters")

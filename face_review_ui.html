@@ -678,6 +678,7 @@
 let currentTab = 'scanner';
 let clustersLoaded = false;
 let reviewNeedsRefresh = false;
+let _lastScanStatus = 'idle';
 
 function switchTab(tab) {
   currentTab = tab;
@@ -688,11 +689,13 @@ function switchTab(tab) {
 
   if (tab === 'review') {
     document.querySelector('[data-tab="review"]').classList.remove('has-update');
-    if (!clustersLoaded || reviewNeedsRefresh) {
+    const scanActive = ['loading_model', 'scanning', 'clustering'].includes(_lastScanStatus);
+    if (!clustersLoaded || reviewNeedsRefresh || scanActive) {
       reviewNeedsRefresh = false;
       clusterFaces = {};
       firstThumb = {};
       loadClusters();
+      loadStats();
     }
   }
   if (tab === 'scanner') {
@@ -893,6 +896,18 @@ async function startScan() {
   const detSize = document.getElementById('det-size').value;
   const threshold = document.getElementById('threshold').value;
 
+  const pendingR = await fetch('/api/scan/pending');
+  const {orphan} = await pendingR.json();
+  if (orphan > 0) {
+    if (!confirm(`The database contains ${orphan} photo(s) from folders not in your current scan list (e.g. a previous test scan).\n\nClick OK to reset the database first, or Cancel to keep the old data and continue.`)) {
+      // User chose to keep old data — proceed with scan
+    } else {
+      const resetR = await fetch('/api/scan/reset', {method: 'POST'});
+      if (!resetR.ok) { showToast('Reset failed'); return; }
+      showToast('Old data cleared.');
+    }
+  }
+
   const r = await fetch('/api/scan/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -922,11 +937,21 @@ async function resetDatabase() {
   loadStats();
 }
 
-function updateScanBtnState() {
+async function updateScanBtnState() {
   const btn = document.getElementById('scan-btn');
-  if (btn.classList.contains('start')) {
-    btn.disabled = folders.length === 0;
-  }
+  if (!btn.classList.contains('start')) return;
+  btn.disabled = folders.length === 0;
+  if (folders.length === 0) { btn.textContent = 'Start Scan'; return; }
+
+  const [statsR, pendingR] = await Promise.all([
+    fetch('/api/stats'), fetch('/api/scan/pending'),
+  ]);
+  const stats = await statsR.json();
+  const {pending} = await pendingR.json();
+
+  if (stats.photos === 0)       btn.textContent = 'Start Scan';
+  else if (pending > 0)         btn.textContent = `Resume Scan (${pending} left)`;
+  else                          btn.textContent = 'Scan for New';
 }
 
 function updateScanUI(s) {
@@ -941,14 +966,15 @@ function updateScanUI(s) {
   const timingEl = document.getElementById('progress-timing');
   const scanning = ['loading_model', 'scanning', 'clustering'].includes(s.status);
   resetBtn.disabled = scanning;
+  _lastScanStatus = s.status;
 
   if (s.status === 'idle') {
     progress.style.display = 'none';
-    btn.textContent = 'Start Scan';
     btn.className = 'scan-btn start';
     btn.onclick = startScan;
     btn.disabled = folders.length === 0;
     msgEl.innerHTML = '';
+    updateScanBtnState();
   } else if (s.status === 'loading_model') {
     progress.style.display = 'block';
     fill.className = 'progress-fill indeterminate';
@@ -1000,11 +1026,11 @@ function updateScanUI(s) {
     msgEl.innerHTML =
       `<div class="scan-done">${esc(s.message)}<br>` +
       `<a onclick="switchTab('review')">Go to Review &rarr;</a></div>`;
-    btn.textContent = 'Scan Again';
     btn.className = 'scan-btn start';
     btn.onclick = startScan;
     btn.disabled = folders.length === 0;
     loadStats();
+    updateScanBtnState();
     reviewNeedsRefresh = true;
     document.querySelector('[data-tab="review"]').classList.add('has-update');
   } else if (s.status === 'error') {
