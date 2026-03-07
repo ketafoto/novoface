@@ -647,6 +647,27 @@
           </label>
           <input type="number" id="threshold" value="0.35" step="0.05" min="0.10" max="0.80">
         </div>
+        <div class="setting">
+          <label>CPU limit
+            <span class="tip-icon">?<span class="tip">
+              Percentage of CPU cores the scan is allowed to use.<br><br>
+              <b>Lower (e.g. 30%):</b><br>
+              <span class="pro">+</span> Laptop stays responsive for other work<br>
+              <span class="con">&minus;</span> Scan takes much longer<br><br>
+              <b>Higher (e.g. 100%):</b><br>
+              <span class="pro">+</span> Fastest possible scan<br>
+              <span class="con">&minus;</span> Machine may feel sluggish<br><br>
+              Default <b>60%</b> is a good balance.
+            </span></span>
+          </label>
+          <select id="cpu-percent">
+            <option value="30">30%</option>
+            <option value="50">50%</option>
+            <option value="60" selected>60%</option>
+            <option value="80">80%</option>
+            <option value="100">100%</option>
+          </select>
+        </div>
       </div>
 
       <div id="progress-section" class="progress-section" style="display:none">
@@ -904,6 +925,7 @@ function connectSSE() {
 async function startScan() {
   const detSize = document.getElementById('det-size').value;
   const threshold = document.getElementById('threshold').value;
+  const cpuPercent = document.getElementById('cpu-percent').value;
 
   const pendingR = await fetch('/api/scan/pending');
   const {orphan} = await pendingR.json();
@@ -920,7 +942,7 @@ async function startScan() {
   const r = await fetch('/api/scan/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({det_size: parseInt(detSize), threshold: parseFloat(threshold)}),
+    body: JSON.stringify({det_size: parseInt(detSize), threshold: parseFloat(threshold), cpu_percent: parseInt(cpuPercent)}),
   });
   const data = await r.json();
   if (!r.ok) {

@@ -79,10 +79,29 @@ def ensure_db():
 
 # ── Scan worker ────────────────────────────────────────────────────────────
 
-def _run_scan(folders, det_size, threshold):
+def _apply_cpu_limit(cpu_percent):
+    """Restrict this process to a subset of CPU cores and lower priority."""
+    import psutil
+    p = psutil.Process()
+    total_cores = psutil.cpu_count()
+    use_cores = max(1, round(total_cores * cpu_percent / 100))
+    all_cpus = list(range(total_cores))
+    p.cpu_affinity(all_cpus[:use_cores])
+    if os.name == "nt":
+        p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+    else:
+        try:
+            p.nice(10)
+        except PermissionError:
+            pass
+
+
+def _run_scan(folders, det_size, threshold, cpu_percent=60):
     from insightface.app import FaceAnalysis
 
     try:
+        _apply_cpu_limit(cpu_percent)
+
         _scan.update(
             status="loading_model",
             message="Loading face detection model...",
@@ -302,6 +321,7 @@ def start_scan():
     data = request.json or {}
     det_size = int(data.get("det_size", 320))
     threshold = float(data.get("threshold", 0.35))
+    cpu_percent = int(data.get("cpu_percent", 60))
 
     conn = get_db()
     rows = conn.execute("SELECT folder_path FROM scan_folders").fetchall()
@@ -312,7 +332,7 @@ def start_scan():
 
     _scan_stop.clear()
     _scan_thread = threading.Thread(
-        target=_run_scan, args=(folders, det_size, threshold), daemon=True,
+        target=_run_scan, args=(folders, det_size, threshold, cpu_percent), daemon=True,
     )
     _scan_thread.start()
     return jsonify({"ok": True})
