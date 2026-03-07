@@ -73,6 +73,16 @@ def ensure_db():
             added_at TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS cluster_groups (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL
+        )
+    """)
+    # Add group_id column to clusters if missing
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(clusters)").fetchall()}
+    if "group_id" not in cols:
+        conn.execute("ALTER TABLE clusters ADD COLUMN group_id INTEGER REFERENCES cluster_groups(id)")
     conn.commit()
     conn.close()
 
@@ -356,6 +366,7 @@ def reset_database():
         DELETE FROM faces;
         DELETE FROM photos;
         DELETE FROM clusters;
+        DELETE FROM cluster_groups;
     """)
     import shutil
     thumbs = THUMB_DIR
@@ -439,7 +450,7 @@ def scan_pending():
 def api_clusters():
     conn = get_db()
     rows = conn.execute("""
-        SELECT c.id, c.name, c.birth_year, c.merged_into,
+        SELECT c.id, c.name, c.birth_year, c.merged_into, c.group_id,
                COUNT(f.id) as face_count
         FROM clusters c
         LEFT JOIN faces f ON f.cluster_id = c.id
@@ -506,6 +517,64 @@ def api_move_face(fid):
     conn = get_db()
     conn.execute("UPDATE faces SET cluster_id = ? WHERE id = ?",
                  (data["cluster_id"], fid))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+# ── Routes: cluster groups ─────────────────────────────────────────────────
+
+@app.route("/api/groups")
+def api_groups():
+    conn = get_db()
+    rows = conn.execute("SELECT id, name FROM cluster_groups ORDER BY name").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/groups", methods=["POST"])
+def api_create_group():
+    data = request.json
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    conn = get_db()
+    cur = conn.execute("INSERT INTO cluster_groups (name) VALUES (?)", (name,))
+    gid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({"id": gid, "name": name})
+
+
+@app.route("/api/groups/<int:gid>", methods=["PUT"])
+def api_update_group(gid):
+    data = request.json
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    conn = get_db()
+    conn.execute("UPDATE cluster_groups SET name = ? WHERE id = ?", (name, gid))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/groups/<int:gid>", methods=["DELETE"])
+def api_delete_group(gid):
+    conn = get_db()
+    conn.execute("UPDATE clusters SET group_id = NULL WHERE group_id = ?", (gid,))
+    conn.execute("DELETE FROM cluster_groups WHERE id = ?", (gid,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/clusters/<int:cid>/group", methods=["PUT"])
+def api_set_cluster_group(cid):
+    data = request.json
+    group_id = data.get("group_id")
+    conn = get_db()
+    conn.execute("UPDATE clusters SET group_id = ? WHERE id = ?", (group_id, cid))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})

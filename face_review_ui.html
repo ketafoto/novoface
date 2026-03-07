@@ -348,6 +348,54 @@
     animation: pulse 1.5s ease-in-out infinite;
   }
   @keyframes pulse { 50% { opacity: 0.5; } }
+  .sidebar-header { display: flex; justify-content: space-between; align-items: center; }
+  .sidebar-actions { display: flex; gap: 8px; align-items: center; }
+  .toggle-tree { font-size: 15px; line-height: 1; }
+  .sidebar-action {
+    font-size: 11px; color: #a5f3c4; cursor: pointer;
+    text-transform: none; letter-spacing: 0;
+  }
+  .sidebar-action:hover { text-decoration: underline; }
+  .group-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 16px; cursor: pointer;
+    background: #181b26; border-bottom: 1px solid #2a2d3a;
+    font-size: 13px; font-weight: 600; color: #c0c0e0;
+  }
+  .group-header:hover { background: #1e2130; }
+  .group-header.drag-over, .group-divider.drag-over {
+    background: #1a2a1a; outline: 2px dashed #a5f3c4; outline-offset: -2px;
+  }
+  .group-arrow { font-size: 10px; color: #6b6b8a; width: 12px; }
+  .group-name { flex: 1; }
+  .group-count { font-size: 11px; color: #6b6b8a; font-weight: 400; }
+  .group-actions { display: none; gap: 4px; }
+  .group-header:hover .group-actions { display: flex; }
+  .group-header:hover .group-count { display: none; }
+  .group-action { font-size: 12px; color: #6b6b8a; cursor: pointer; padding: 0 2px; }
+  .group-action:hover { color: #fff; }
+  .ctx-menu {
+    position: fixed; z-index: 1000;
+    background: #1e2130; border: 1px solid #3a3d4a; border-radius: 6px;
+    min-width: 180px; padding: 4px 0;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .ctx-title {
+    padding: 6px 14px; font-size: 11px; color: #6b6b8a;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .ctx-item {
+    padding: 7px 14px; font-size: 13px; cursor: pointer; color: #e0e0e0;
+  }
+  .ctx-item:hover { background: #2a2d3e; }
+  .ctx-none { color: #6b6b8a; font-style: italic; }
+  .ctx-new { color: #a5f3c4; }
+  .ctx-divider { border-top: 1px solid #2a2d3a; margin: 4px 0; }
+  .group-divider {
+    padding: 8px 16px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 1px; color: #6b6b8a; border-top: 1px solid #2a2d3a;
+    border-bottom: 1px solid #2a2d3a; background: #13151f;
+  }
   .cluster-item {
     display: flex;
     align-items: center;
@@ -967,6 +1015,7 @@ async function resetDatabase() {
   showToast('Database reset. Ready for a fresh scan.');
   loadStats();
   clusters = [];
+  groups = [];
   clusterFaces = {};
   firstThumb = {};
   clustersLoaded = false;
@@ -1098,16 +1147,25 @@ function updateScanUI(s) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 let clusters = [];
+let groups = [];
 let activeCluster = null;
 let clusterFaces = {};
 let firstThumb = {};
+let collapsedGroups = new Set();
 
 let _thumbsLoading = false;
 let _thumbsProgress = '';
 
+async function loadGroups() {
+  const r = await fetch('/api/groups');
+  groups = await r.json();
+}
+
 async function loadClusters() {
-  const r = await fetch('/api/clusters');
-  clusters = await r.json();
+  const [cr, gr] = await Promise.all([fetch('/api/clusters'), fetch('/api/groups')]);
+  clusters = await cr.json();
+  groups = await gr.json();
+  if (!clustersLoaded) groups.forEach(g => collapsedGroups.add(g.id));
   clustersLoaded = true;
   renderSidebar();
 
@@ -1130,36 +1188,190 @@ async function loadClusters() {
   renderSidebar();
 }
 
-function renderSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  let html = '<div class="sidebar-header">Clusters</div>';
-  if (_thumbsLoading) {
-    html += `<div class="sidebar-loading">${esc(_thumbsProgress)}</div>`;
-  }
-  const sorted = [...clusters].sort((a, b) => {
+function sortClusters(list) {
+  return [...list].sort((a, b) => {
     if (a.name && !b.name) return -1;
     if (!a.name && b.name) return 1;
     if (a.name && b.name) return a.name.localeCompare(b.name);
     return b.face_count - a.face_count;
   });
-  for (const c of sorted) {
-    const isActive = activeCluster && activeCluster.id === c.id;
-    const name = c.name || 'Unnamed';
-    const nameClass = c.name ? 'name' : 'name unnamed';
-    const thumb = firstThumb[c.id] || '';
-    html += `
-      <div class="cluster-item ${isActive ? 'active' : ''}"
-           onclick="selectCluster(${c.id})">
-        <div class="thumb-stack">
-          ${thumb ? `<img src="${thumb}" alt="">` : ''}
-        </div>
-        <div class="info">
-          <div class="${nameClass}">${esc(name)}</div>
-          <div class="count">${c.face_count} photo${c.face_count !== 1 ? 's' : ''}${c.birth_year ? ' \u00b7 b.' + c.birth_year : ''}</div>
-        </div>
-      </div>`;
+}
+
+function clusterItemHtml(c) {
+  const isActive = activeCluster && activeCluster.id === c.id;
+  const name = c.name || 'Unnamed';
+  const nameClass = c.name ? 'name' : 'name unnamed';
+  const thumb = firstThumb[c.id] || '';
+  return `
+    <div class="cluster-item ${isActive ? 'active' : ''}"
+         onclick="selectCluster(${c.id})"
+         oncontextmenu="event.preventDefault();showClusterContextMenu(event,${c.id})"
+         draggable="true"
+         ondragstart="event.dataTransfer.setData('text/plain','${c.id}')">
+      <div class="thumb-stack">
+        ${thumb ? `<img src="${thumb}" alt="">` : ''}
+      </div>
+      <div class="info">
+        <div class="${nameClass}">${esc(name)}</div>
+        <div class="count">${c.face_count} photo${c.face_count !== 1 ? 's' : ''}${c.birth_year ? ' \u00b7 b.' + c.birth_year : ''}</div>
+      </div>
+    </div>`;
+}
+
+function showClusterContextMenu(e, clusterId) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+
+  let html = '<div class="ctx-title">Move to group</div>';
+  for (const g of groups) {
+    html += `<div class="ctx-item" onclick="moveToGroup(${clusterId},${g.id})">${esc(g.name)}</div>`;
   }
+  html += `<div class="ctx-item ctx-none" onclick="moveToGroup(${clusterId},null)">— Remove from group —</div>`;
+  html += `<div class="ctx-divider"></div>`;
+  html += `<div class="ctx-item ctx-new" onclick="moveToNewGroup(${clusterId})">+ New group...</div>`;
+
+  menu.innerHTML = html;
+  document.body.appendChild(menu);
+
+  const x = Math.min(e.clientX, window.innerWidth - 200);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10);
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+
+  setTimeout(() => document.addEventListener('click', closeContextMenu, {once: true}), 0);
+}
+
+function closeContextMenu() {
+  const m = document.getElementById('ctx-menu');
+  if (m) m.remove();
+}
+
+async function moveToGroup(clusterId, groupId) {
+  closeContextMenu();
+  await fetch(`/api/clusters/${clusterId}/group`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({group_id: groupId}),
+  });
+  const c = clusters.find(c => c.id === clusterId);
+  if (c) c.group_id = groupId;
+  if (activeCluster && activeCluster.id === clusterId) activeCluster.group_id = groupId;
+  renderSidebar();
+  if (activeCluster && activeCluster.id === clusterId) renderDetail();
+}
+
+async function dropOnGroup(e, groupId) {
+  const clusterId = parseInt(e.dataTransfer.getData('text/plain'));
+  if (isNaN(clusterId)) return;
+  await moveToGroup(clusterId, groupId);
+}
+
+async function moveToNewGroup(clusterId) {
+  closeContextMenu();
+  const name = prompt('New group name:');
+  if (!name || !name.trim()) return;
+  const r = await fetch('/api/groups', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name.trim()}),
+  });
+  const g = await r.json();
+  await loadGroups();
+  await moveToGroup(clusterId, g.id);
+}
+
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  let html = '<div class="sidebar-header">Clusters'
+    + '<span class="sidebar-actions">'
+    + (groups.length > 0 ? '<span class="sidebar-action toggle-tree" onclick="toggleAllGroups()" title="Collapse/expand all groups">&#x229e;</span>' : '')
+    + ' <span class="sidebar-action" onclick="promptNewGroup()" title="Group clusters together and give names like &#34;Igor Family&#34;, &#34;Alona Friends&#34;">+ Group</span>'
+    + '</span></div>';
+  if (_thumbsLoading) {
+    html += `<div class="sidebar-loading">${esc(_thumbsProgress)}</div>`;
+  }
+
+  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
+  for (const g of sortedGroups) {
+    const members = sortClusters(clusters.filter(c => c.group_id === g.id));
+    const collapsed = collapsedGroups.has(g.id);
+    const arrow = collapsed ? '\u25b6' : '\u25bc';
+    const count = members.reduce((s, c) => s + c.face_count, 0);
+    html += `
+      <div class="group-header" onclick="toggleGroup(${g.id})"
+           ondragover="event.preventDefault();this.classList.add('drag-over')"
+           ondragleave="this.classList.remove('drag-over')"
+           ondrop="event.preventDefault();this.classList.remove('drag-over');dropOnGroup(event,${g.id})">
+        <span class="group-arrow">${arrow}</span>
+        <span class="group-name">${esc(g.name)}</span>
+        <span class="group-count">${members.length} clusters \u00b7 ${count} faces</span>
+        <span class="group-actions">
+          <span class="group-action" onclick="event.stopPropagation();renameGroup(${g.id},'${escJs(g.name)}')" title="Rename">\u270e</span>
+          <span class="group-action" onclick="event.stopPropagation();deleteGroup(${g.id})" title="Delete group">\u2716</span>
+        </span>
+      </div>`;
+    if (!collapsed) {
+      for (const c of members) html += clusterItemHtml(c);
+    }
+  }
+
+  const ungrouped = sortClusters(clusters.filter(c => !c.group_id));
+  if (ungrouped.length > 0 && sortedGroups.length > 0) {
+    html += `<div class="group-divider"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="event.preventDefault();this.classList.remove('drag-over');dropOnGroup(event,null)">Ungrouped</div>`;
+  }
+  for (const c of ungrouped) html += clusterItemHtml(c);
+
   sidebar.innerHTML = html;
+}
+
+function toggleGroup(gid) {
+  if (collapsedGroups.has(gid)) collapsedGroups.delete(gid);
+  else collapsedGroups.add(gid);
+  renderSidebar();
+}
+
+function toggleAllGroups() {
+  const allCollapsed = groups.every(g => collapsedGroups.has(g.id));
+  if (allCollapsed) collapsedGroups.clear();
+  else groups.forEach(g => collapsedGroups.add(g.id));
+  renderSidebar();
+}
+
+async function promptNewGroup() {
+  const name = prompt('New group name:');
+  if (!name || !name.trim()) return;
+  await fetch('/api/groups', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name.trim()}),
+  });
+  await loadGroups();
+  renderSidebar();
+}
+
+async function renameGroup(gid, oldName) {
+  const name = prompt('Rename group:', oldName);
+  if (!name || !name.trim() || name.trim() === oldName) return;
+  await fetch(`/api/groups/${gid}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name.trim()}),
+  });
+  await loadGroups();
+  renderSidebar();
+}
+
+async function deleteGroup(gid) {
+  if (!confirm('Delete this group? Clusters inside will become ungrouped.')) return;
+  await fetch(`/api/groups/${gid}`, {method: 'DELETE'});
+  clusters.forEach(c => { if (c.group_id === gid) c.group_id = null; });
+  await loadGroups();
+  renderSidebar();
 }
 
 async function selectCluster(id) {
@@ -1194,6 +1406,13 @@ function renderDetail() {
         <label>&nbsp;</label>
         <button class="btn btn-save" onclick="saveCluster()">Save</button>
       </div>
+      <div class="field">
+        <label>Group</label>
+        <select id="inp-group" onchange="assignGroup()">
+          <option value="">— None —</option>
+          ${groups.map(g => `<option value="${g.id}" ${c.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+        </select>
+      </div>
       <div class="field" style="justify-content:flex-end; margin-left:auto">
         <label>&nbsp;</label>
         <button class="btn btn-merge" onclick="showMergeModal()">Merge into...</button>
@@ -1224,6 +1443,22 @@ function renderDetail() {
   }
   html += '</div>';
   document.getElementById('main').innerHTML = html;
+}
+
+async function assignGroup() {
+  if (!activeCluster) return;
+  const val = document.getElementById('inp-group').value;
+  const group_id = val ? parseInt(val) : null;
+  await fetch(`/api/clusters/${activeCluster.id}/group`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({group_id}),
+  });
+  activeCluster.group_id = group_id;
+  const idx = clusters.findIndex(c => c.id === activeCluster.id);
+  if (idx >= 0) clusters[idx].group_id = group_id;
+  renderSidebar();
+  showToast(group_id ? 'Assigned to group' : 'Removed from group');
 }
 
 async function saveCluster() {
