@@ -17,3 +17,11 @@ alwaysApply: true
   alongside the code change summary. The user approves both the code (commit)
   and the message together. Show the full message text and wait for explicit
   "go ahead" / approval. Never commit without this confirmation.
+
+## Sequential Workflow
+
+- If the user's message contains multiple features or tasks, work on them
+  **one at a time**: implement → propose commit message → wait for approval →
+  commit → then start the next task.
+- Never begin implementing the next feature before the previous one is committed.
+- This prevents mixed commits and keeps the git history clean and reviewable.
