@@ -13,6 +13,7 @@ alwaysApply: true
 - If changes are interleaved in the same files and splitting would require
   stashes or temporary file versions, combine them into one commit with a
   message that lists each change as a bullet point.
-- Always present the commit message to the user for approval before committing.
-  Show the full message text and wait for explicit "go ahead" / approval.
-  Never commit without this confirmation.
+- After every proposed fix or feature, present the commit message for approval
+  alongside the code change summary. The user approves both the code (commit)
+  and the message together. Show the full message text and wait for explicit
+  "go ahead" / approval. Never commit without this confirmation.

@@ -1060,17 +1060,19 @@ let firstThumb = {};
 async function loadClusters() {
   const r = await fetch('/api/clusters');
   clusters = await r.json();
-
-  for (const c of clusters) {
-    if (!firstThumb[c.id] && c.face_count > 0) {
-      const fr = await fetch(`/api/clusters/${c.id}/faces`);
-      const faces = await fr.json();
-      clusterFaces[c.id] = faces;
-      if (faces.length > 0) firstThumb[c.id] = `/thumbs/${faces[0].thumb_path}`;
-    }
-  }
   clustersLoaded = true;
   renderSidebar();
+
+  const toLoad = clusters.filter(c => c.face_count > 0 && !firstThumb[c.id]);
+  for (let i = 0; i < toLoad.length; i += 10) {
+    const batch = toLoad.slice(i, i + 10);
+    await Promise.all(batch.map(async c => {
+      const fr = await fetch(`/api/clusters/${c.id}/faces?limit=1`);
+      const faces = await fr.json();
+      if (faces.length > 0) firstThumb[c.id] = `/thumbs/${faces[0].thumb_path}`;
+    }));
+    renderSidebar();
+  }
 }
 
 function renderSidebar() {

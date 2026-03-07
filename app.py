@@ -433,8 +433,9 @@ def api_clusters():
 
 @app.route("/api/clusters/<int:cid>/faces")
 def api_cluster_faces(cid):
+    limit = request.args.get("limit", type=int)
     conn = get_db()
-    rows = conn.execute("""
+    q = """
         SELECT f.id as face_id, f.thumb_path, f.photo_id,
                p.file_path, p.photo_date, p.date_source
         FROM faces f
@@ -443,7 +444,10 @@ def api_cluster_faces(cid):
         ORDER BY
             CASE WHEN p.photo_date IS NOT NULL THEN 0 ELSE 1 END,
             p.photo_date, p.file_path
-    """, (cid,)).fetchall()
+    """
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    rows = conn.execute(q, (cid,)).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
