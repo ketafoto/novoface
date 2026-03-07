@@ -31,10 +31,12 @@ pip install -r requirements.txt
 ### Unified web app (recommended)
 
 ```bash
-python app.py
+python app.py                  # start and open browser
+python app.py --no-browser     # start without opening a browser
+python app.py --port 9000      # use a custom port
 ```
 
-Opens a local web UI at http://localhost:8050 with two tabs:
+Opens a local web UI at http://localhost:8050 (by default) with two tabs:
 
 **Scanner tab** — add archive folders, start/stop scans, and watch live progress:
 - Add one or more photo folders (they're scanned recursively)
