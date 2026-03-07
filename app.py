@@ -361,6 +361,14 @@ def stop_scan():
     return jsonify({"ok": True})
 
 
+@app.route("/api/scan/cpu", methods=["POST"])
+def set_cpu_limit():
+    data = request.json or {}
+    cpu_percent = int(data.get("cpu_percent", 60))
+    _apply_cpu_limit(cpu_percent)
+    return jsonify({"ok": True, "cpu_percent": cpu_percent})
+
+
 @app.route("/api/scan/reset", methods=["POST"])
 def reset_database():
     """Drop all scan data so the next scan starts from scratch."""

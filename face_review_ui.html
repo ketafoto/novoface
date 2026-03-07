@@ -708,7 +708,7 @@
               Default <b>60%</b> is a good balance.
             </span></span>
           </label>
-          <select id="cpu-percent">
+          <select id="cpu-percent" onchange="applyCpuLimit()">
             <option value="30">30%</option>
             <option value="50">50%</option>
             <option value="60" selected>60%</option>
@@ -1002,6 +1002,16 @@ async function startScan() {
 
 async function stopScan() {
   await fetch('/api/scan/stop', {method: 'POST'});
+}
+
+async function applyCpuLimit() {
+  const v = document.getElementById('cpu-percent').value;
+  await fetch('/api/scan/cpu', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cpu_percent: parseInt(v)}),
+  });
+  showToast(`CPU limit set to ${v}%`);
 }
 
 async function resetDatabase() {
