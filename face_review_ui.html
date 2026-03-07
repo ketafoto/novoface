@@ -339,6 +339,15 @@
     top: 0;
     background: #13151f;
   }
+  .sidebar-loading {
+    padding: 8px 16px;
+    font-size: 11px;
+    color: #a5f3c4;
+    background: #1a2a1a;
+    border-bottom: 1px solid #2a2d3a;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
   .cluster-item {
     display: flex;
     align-items: center;
@@ -935,6 +944,20 @@ async function resetDatabase() {
   }
   showToast('Database reset. Ready for a fresh scan.');
   loadStats();
+  clusters = [];
+  clusterFaces = {};
+  firstThumb = {};
+  clustersLoaded = false;
+  activeCluster = null;
+  renderSidebar();
+  document.getElementById('detail').innerHTML = '';
+  const btn = document.getElementById('scan-btn');
+  btn.textContent = 'Start Scan';
+  btn.className = 'scan-btn start';
+  btn.onclick = startScan;
+  btn.disabled = folders.length === 0;
+  document.getElementById('progress-section').style.display = 'none';
+  document.getElementById('scan-message').innerHTML = '';
 }
 
 async function updateScanBtnState() {
@@ -1001,7 +1024,7 @@ function updateScanUI(s) {
       `ETA: <span>${formatEta(s.eta_seconds)}</span>` +
       (s.started_at ? ` &middot; started ${s.started_at.replace('T', ' ')}` : '');
     fileEl.textContent = s.current_file;
-    btn.textContent = 'Stop Scan';
+    btn.textContent = 'Pause Scan';
     btn.className = 'scan-btn stop';
     btn.onclick = stopScan;
     btn.disabled = false;
@@ -1057,6 +1080,9 @@ let activeCluster = null;
 let clusterFaces = {};
 let firstThumb = {};
 
+let _thumbsLoading = false;
+let _thumbsProgress = '';
+
 async function loadClusters() {
   const r = await fetch('/api/clusters');
   clusters = await r.json();
@@ -1064,6 +1090,9 @@ async function loadClusters() {
   renderSidebar();
 
   const toLoad = clusters.filter(c => c.face_count > 0 && !firstThumb[c.id]);
+  if (toLoad.length === 0) return;
+
+  _thumbsLoading = true;
   for (let i = 0; i < toLoad.length; i += 10) {
     const batch = toLoad.slice(i, i + 10);
     await Promise.all(batch.map(async c => {
@@ -1071,13 +1100,20 @@ async function loadClusters() {
       const faces = await fr.json();
       if (faces.length > 0) firstThumb[c.id] = `/thumbs/${faces[0].thumb_path}`;
     }));
+    _thumbsProgress = `Loading thumbnails... ${Math.min(i + 10, toLoad.length)}/${toLoad.length}`;
     renderSidebar();
   }
+  _thumbsLoading = false;
+  _thumbsProgress = '';
+  renderSidebar();
 }
 
 function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
   let html = '<div class="sidebar-header">Clusters</div>';
+  if (_thumbsLoading) {
+    html += `<div class="sidebar-loading">${esc(_thumbsProgress)}</div>`;
+  }
   for (const c of clusters) {
     const isActive = activeCluster && activeCluster.id === c.id;
     const name = c.name || 'Unnamed';
