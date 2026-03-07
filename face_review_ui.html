@@ -285,6 +285,14 @@
     color: #ff8888;
   }
   .scan-btn.stop:hover { background: #5a2a2a; }
+  .scan-btn.reset {
+    background: #2a1a1a;
+    border-color: #5a3a1a;
+    color: #ffaa66;
+    font-size: 0.8rem;
+    padding: 6px 14px;
+  }
+  .scan-btn.reset:hover { background: #3a2a1a; }
   .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .scan-done {
@@ -643,6 +651,7 @@
 
       <div class="scan-btn-row">
         <button id="scan-btn" class="scan-btn start" onclick="startScan()">Start Scan</button>
+        <button id="reset-btn" class="scan-btn reset" onclick="resetDatabase()">Reset DB</button>
       </div>
       <div id="scan-message"></div>
     </div>
@@ -901,6 +910,18 @@ async function stopScan() {
   await fetch('/api/scan/stop', {method: 'POST'});
 }
 
+async function resetDatabase() {
+  if (!confirm('This will delete ALL scan data (photos, faces, clusters, thumbnails) so the next scan starts completely from scratch.\n\nAre you sure?')) return;
+  const r = await fetch('/api/scan/reset', {method: 'POST'});
+  const data = await r.json();
+  if (!r.ok) {
+    showToast(data.error || 'Reset failed');
+    return;
+  }
+  showToast('Database reset. Ready for a fresh scan.');
+  loadStats();
+}
+
 function updateScanBtnState() {
   const btn = document.getElementById('scan-btn');
   if (btn.classList.contains('start')) {
@@ -910,6 +931,7 @@ function updateScanBtnState() {
 
 function updateScanUI(s) {
   const btn = document.getElementById('scan-btn');
+  const resetBtn = document.getElementById('reset-btn');
   const progress = document.getElementById('progress-section');
   const fill = document.getElementById('progress-fill');
   const statsEl = document.getElementById('progress-stats');
@@ -917,6 +939,8 @@ function updateScanUI(s) {
   const msgEl = document.getElementById('scan-message');
 
   const timingEl = document.getElementById('progress-timing');
+  const scanning = ['loading_model', 'scanning', 'clustering'].includes(s.status);
+  resetBtn.disabled = scanning;
 
   if (s.status === 'idle') {
     progress.style.display = 'none';
