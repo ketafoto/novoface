@@ -1136,7 +1136,13 @@ function renderSidebar() {
   if (_thumbsLoading) {
     html += `<div class="sidebar-loading">${esc(_thumbsProgress)}</div>`;
   }
-  for (const c of clusters) {
+  const sorted = [...clusters].sort((a, b) => {
+    if (a.name && !b.name) return -1;
+    if (!a.name && b.name) return 1;
+    if (a.name && b.name) return a.name.localeCompare(b.name);
+    return b.face_count - a.face_count;
+  });
+  for (const c of sorted) {
     const isActive = activeCluster && activeCluster.id === c.id;
     const name = c.name || 'Unnamed';
     const nameClass = c.name ? 'name' : 'name unnamed';
