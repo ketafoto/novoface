@@ -46,6 +46,10 @@ _scan = {
     "eta_seconds": 0,
     "current_file": "",
     "message": "",
+    "started_at": None,
+    "elapsed_seconds": 0,
+    "photo_seconds": 0.0,
+    "sec_per_img": 0.0,
 }
 _scan_thread = None
 _scan_stop = threading.Event()
@@ -83,6 +87,8 @@ def _run_scan(folders, det_size, threshold):
             message="Loading face detection model...",
             current=0, total=0, faces_found=0, errors=0,
             rate=0.0, eta_seconds=0, current_file="",
+            started_at=datetime.now().isoformat(timespec="seconds"),
+            elapsed_seconds=0, photo_seconds=0.0, sec_per_img=0.0,
         )
 
         fa = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
@@ -132,10 +138,14 @@ def _run_scan(folders, det_size, threshold):
             elapsed = time.time() - t0
             rate = (i + 1) / elapsed if elapsed > 1 else 0
             eta = (total - i - 1) / rate if rate > 0 else 0
+            spi = elapsed / (i + 1) if i > 0 else 0
             _scan.update(current=i + 1, faces_found=found, errors=errs,
                          rate=round(rate, 2), eta_seconds=round(eta),
+                         elapsed_seconds=round(elapsed),
+                         sec_per_img=round(spi, 1),
                          current_file=path.name)
 
+            photo_t0 = time.time()
             try:
                 found += process_photo(path, conn, fa)
             except Exception:
@@ -148,6 +158,7 @@ def _run_scan(folders, det_size, threshold):
                     conn.commit()
                 except Exception:
                     pass
+            _scan["photo_seconds"] = round(time.time() - photo_t0, 1)
 
         _scan.update(current=total, faces_found=found, errors=errs,
                      status="clustering", message="Clustering faces...")
@@ -170,6 +181,48 @@ def index():
 @app.route("/thumbs/<path:filename>")
 def serve_thumb(filename):
     return send_from_directory(str(THUMB_DIR.resolve()), filename)
+
+
+# ── Routes: filesystem browser ─────────────────────────────────────────────
+
+@app.route("/api/browse")
+def api_browse():
+    """List directories at the given path, or list available drives/root."""
+    requested = request.args.get("path", "")
+
+    if not requested:
+        if os.name == "nt":
+            import string
+            drives = []
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                try:
+                    if Path(drive).exists():
+                        drives.append({"name": f"{letter}:", "path": drive})
+                except OSError:
+                    pass
+            return jsonify({"current": "", "parent": None, "dirs": drives})
+        else:
+            requested = "/"
+
+    p = Path(requested).resolve()
+    if not p.is_dir():
+        return jsonify({"error": "Not a directory"}), 400
+
+    parent = str(p.parent) if p.parent != p else None
+
+    dirs = []
+    try:
+        for item in sorted(p.iterdir(), key=lambda x: x.name.lower()):
+            try:
+                if item.is_dir():
+                    dirs.append({"name": item.name, "path": str(item)})
+            except (PermissionError, OSError):
+                pass
+    except (PermissionError, OSError):
+        pass
+
+    return jsonify({"current": str(p), "parent": parent, "dirs": dirs})
 
 
 # ── Routes: scan management ────────────────────────────────────────────────

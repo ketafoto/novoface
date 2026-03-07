@@ -5,7 +5,8 @@ to review clusters, name people, and quickly copy file paths for use with the
 gedcom tree app.
 
 No files are copied or moved — the tool generates small thumbnails for browsing
-and references originals by path only.
+and references originals by path only. Scanning is fully resumable: you can stop
+at any time and pick up exactly where you left off, even across reboots.
 
 ## Files
 

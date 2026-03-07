@@ -1,0 +1,16 @@
+---
+description: Git commit policy — one commit per functional change
+alwaysApply: true
+---
+
+## Commit Granularity
+
+- **One commit per functional change or enhancement.** Each commit should cover
+  a single coherent unit of work — a new feature, a bug fix, a UI enhancement,
+  or a refactor. Don't bundle unrelated changes.
+- If multiple changes were made before committing and they touch different files
+  or easily separable hunks, split them into separate commits.
+- If changes are interleaved in the same files and splitting would require
+  stashes or temporary file versions, combine them into one commit with a
+  message that lists each change as a bullet point.
+- Always present the commit message to the user for approval before committing.
