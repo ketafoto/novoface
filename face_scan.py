@@ -69,9 +69,9 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
         CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
-        CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
     """)
     _migrate_db(conn)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash)")
     conn.commit()
     return conn
 
