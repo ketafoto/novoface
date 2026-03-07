@@ -6,7 +6,9 @@ gedcom tree app.
 
 No files are copied or moved — the tool generates small thumbnails for browsing
 and references originals by path only. Scanning is fully resumable: you can stop
-at any time and pick up exactly where you left off, even across reboots.
+at any time and pick up exactly where you left off, even across reboots. If photos
+are moved to a new location, the scanner recognises them by SHA-256 hash and
+updates the stored path without reprocessing.
 
 ## Files
 
@@ -40,6 +42,8 @@ Opens a local web UI at http://localhost:8050 with two tabs:
 - Set clustering similarity threshold (default 0.35, higher = stricter)
 - Start a scan — progress updates live in the browser
 - Stop and resume at any time; already-processed photos are skipped
+- Moved files are detected by content hash and paths are updated automatically
+- **Reset DB** button wipes all data so you can start a completely fresh scan
 
 **Review tab** — browse and manage face clusters:
 - Browse auto-detected face clusters sorted by size

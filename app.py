@@ -30,6 +30,7 @@ from face_scan import (
     init_db,
     process_photo,
     cluster_faces,
+    compute_file_hash,
 )
 
 app = Flask(__name__)
@@ -96,6 +97,9 @@ def _run_scan(folders, det_size, threshold):
 
         conn = init_db(DB_PATH)
         already = {r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()}
+        known_hashes = dict(
+            conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
+        )
 
         files = []
         for folder in folders:
@@ -147,7 +151,19 @@ def _run_scan(folders, det_size, threshold):
 
             photo_t0 = time.time()
             try:
-                found += process_photo(path, conn, fa)
+                fhash = compute_file_hash(path)
+                if fhash in known_hashes:
+                    conn.execute(
+                        "UPDATE photos SET file_path = ? WHERE id = ?",
+                        (str(path), known_hashes[fhash]),
+                    )
+                    conn.commit()
+                    _scan["photo_seconds"] = round(time.time() - photo_t0, 1)
+                    continue
+                found += process_photo(path, conn, fa, file_hash=fhash)
+                known_hashes[fhash] = conn.execute(
+                    "SELECT id FROM photos WHERE file_path = ?", (str(path),)
+                ).fetchone()[0]
             except Exception:
                 errs += 1
                 try:
@@ -299,6 +315,25 @@ def stop_scan():
     if not _scan_thread or not _scan_thread.is_alive():
         return jsonify({"error": "No scan running"}), 400
     _scan_stop.set()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/scan/reset", methods=["POST"])
+def reset_database():
+    """Drop all scan data so the next scan starts from scratch."""
+    if _scan_thread and _scan_thread.is_alive():
+        return jsonify({"error": "Cannot reset while a scan is running"}), 400
+    conn = get_db()
+    conn.executescript("""
+        DELETE FROM faces;
+        DELETE FROM photos;
+        DELETE FROM clusters;
+    """)
+    import shutil
+    thumbs = THUMB_DIR
+    if thumbs.is_dir():
+        shutil.rmtree(thumbs)
+        thumbs.mkdir(parents=True, exist_ok=True)
     return jsonify({"ok": True})
 
 

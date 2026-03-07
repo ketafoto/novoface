@@ -22,7 +22,7 @@ separate GEDCOM genealogy app (at `C:\temp\gedcom.git`) where photos are uploade
 ## Database Schema (`face_data/faces.db`)
 
 **photos** — one row per processed image file (even if no faces found, to enable resume)
-- `id`, `file_path` (UNIQUE), `photo_date`, `date_source` (exif|path), `file_size`, `processed_at`
+- `id`, `file_path` (UNIQUE), `file_hash` (SHA-256, for moved-file dedup), `photo_date`, `date_source` (exif|path), `file_size`, `processed_at`
 
 **faces** — one row per detected face
 - `id`, `photo_id` (FK→photos), `face_index`, `top`, `right_`, `bottom`, `left_`

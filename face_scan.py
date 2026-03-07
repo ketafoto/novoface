@@ -18,6 +18,7 @@ The scan is resumable: re-running skips already-processed files.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import sqlite3
@@ -45,6 +46,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS photos (
             id INTEGER PRIMARY KEY,
             file_path TEXT UNIQUE NOT NULL,
+            file_hash TEXT,
             photo_date TEXT,
             date_source TEXT,
             file_size INTEGER,
@@ -67,9 +69,27 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_faces_cluster ON faces(cluster_id);
         CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+        CREATE INDEX IF NOT EXISTS idx_photos_hash ON photos(file_hash);
     """)
+    _migrate_db(conn)
     conn.commit()
     return conn
+
+
+def _migrate_db(conn: sqlite3.Connection):
+    """Add columns that may be missing in databases created by older versions."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(photos)").fetchall()}
+    if "file_hash" not in cols:
+        conn.execute("ALTER TABLE photos ADD COLUMN file_hash TEXT")
+
+
+def compute_file_hash(file_path: Path) -> str:
+    """SHA-256 of file contents. Reads in 64KB chunks to limit memory."""
+    h = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def extract_date(file_path: Path) -> tuple:
@@ -115,13 +135,13 @@ def process_photo(
     file_path: Path,
     conn: sqlite3.Connection,
     face_app: FaceAnalysis,
+    file_hash: str | None = None,
 ) -> int:
     """Process a single photo. Returns number of faces found."""
     img = load_image_cv2(file_path)
     if img is None:
         return 0
 
-    # Limit very large images to avoid OOM
     h, w = img.shape[:2]
     max_dim = 2048
     if max(h, w) > max_dim:
@@ -136,11 +156,10 @@ def process_photo(
     except Exception:
         detected_faces = []
 
-    # Store photo record (even if no faces, so we don't reprocess)
     cursor = conn.execute(
-        "INSERT INTO photos (file_path, photo_date, date_source, file_size, processed_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (str(file_path), photo_date, date_source,
+        "INSERT INTO photos (file_path, file_hash, photo_date, date_source, file_size, processed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (str(file_path), file_hash, photo_date, date_source,
          file_path.stat().st_size, datetime.now().isoformat()),
     )
     photo_id = cursor.lastrowid
@@ -270,10 +289,13 @@ def scan_archive(archive_path: Path, det_size: int, threshold: float = 0.35):
 
     conn = init_db(DB_PATH)
 
-    processed = set(
+    processed_paths = set(
         r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()
     )
-    print(f"Already processed: {len(processed)} files")
+    known_hashes = dict(
+        conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
+    )
+    print(f"Already processed: {len(processed_paths)} files ({len(known_hashes)} with hash)")
 
     print(f"Scanning {archive_path} for photos...")
     photo_files = []
@@ -281,7 +303,7 @@ def scan_archive(archive_path: Path, det_size: int, threshold: float = 0.35):
         for fname in files:
             if Path(fname).suffix.lower() in PHOTO_EXTENSIONS:
                 full = Path(root) / fname
-                if str(full) not in processed:
+                if str(full) not in processed_paths:
                     photo_files.append(full)
 
     total = len(photo_files)
@@ -304,6 +326,7 @@ def scan_archive(archive_path: Path, det_size: int, threshold: float = 0.35):
     total_faces = 0
     start = time.time()
     errors = 0
+    skipped = 0
 
     for i, fpath in enumerate(photo_files):
         elapsed = time.time() - start
@@ -314,13 +337,26 @@ def scan_archive(archive_path: Path, det_size: int, threshold: float = 0.35):
             f"\r[{i + 1}/{total}] "
             f"faces: {total_faces} | "
             f"errors: {errors} | "
+            f"skipped: {skipped} | "
             f"{rate:.1f} img/s | "
             f"ETA: {remaining / 3600:.1f}h   ",
             end="", flush=True,
         )
 
         try:
-            n = process_photo(fpath, conn, face_app)
+            fhash = compute_file_hash(fpath)
+            if fhash in known_hashes:
+                conn.execute(
+                    "UPDATE photos SET file_path = ? WHERE id = ?",
+                    (str(fpath), known_hashes[fhash]),
+                )
+                conn.commit()
+                skipped += 1
+                continue
+            n = process_photo(fpath, conn, face_app, file_hash=fhash)
+            known_hashes[fhash] = conn.execute(
+                "SELECT id FROM photos WHERE file_path = ?", (str(fpath),)
+            ).fetchone()[0]
             total_faces += n
         except KeyboardInterrupt:
             print("\n\nInterrupted! Progress saved. Re-run to resume.")
