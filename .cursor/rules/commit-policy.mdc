@@ -14,3 +14,5 @@ alwaysApply: true
   stashes or temporary file versions, combine them into one commit with a
   message that lists each change as a bullet point.
 - Always present the commit message to the user for approval before committing.
+  Show the full message text and wait for explicit "go ahead" / approval.
+  Never commit without this confirmation.
