@@ -10,8 +10,10 @@ Usage:
 """
 
 import argparse
+import ctypes
 import json
 import os
+import sys
 import sqlite3
 import threading
 import time
@@ -33,38 +35,103 @@ from face_scan import (
     compute_file_hash,
 )
 
+# OpenVINO backend uses separate DB and thumbs
+try:
+    from openvino_pipeline import DB_PATH_OV, THUMB_DIR_OV
+except ImportError:
+    DB_PATH_OV = DATA_DIR / "faces_ov.db"
+    THUMB_DIR_OV = DATA_DIR / "thumbs_ov"
+
 app = Flask(__name__)
 
-# ── Scan state (read by SSE endpoint, written by scan worker) ─────────────
+BACKEND_CONFIG = DATA_DIR / "backend.json"
 
-_scan = {
-    "status": "idle",
-    "current": 0,
-    "total": 0,
-    "faces_found": 0,
-    "errors": 0,
-    "rate": 0.0,
-    "eta_seconds": 0,
-    "current_file": "",
-    "message": "",
-    "started_at": None,
-    "elapsed_seconds": 0,
-    "photo_seconds": 0.0,
-    "sec_per_img": 0.0,
-}
+def get_backend() -> str:
+    """Current backend: 'cpu' (InsightFace) or 'openvino' (Iris Xe)."""
+    if not BACKEND_CONFIG.exists():
+        return "cpu"
+    try:
+        with open(BACKEND_CONFIG) as f:
+            data = json.load(f)
+            return "openvino" if data.get("backend") == "openvino" else "cpu"
+    except Exception:
+        return "cpu"
+
+def set_backend(backend: str) -> None:
+    if backend not in ("cpu", "openvino"):
+        raise ValueError("backend must be 'cpu' or 'openvino'")
+    DATA_DIR.mkdir(exist_ok=True)
+    with open(BACKEND_CONFIG, "w") as f:
+        json.dump({"backend": backend}, f)
+
+# ── Scan state (per backend; read by SSE, written by scan worker) ─────────
+
+def _scan_template():
+    return {
+        "status": "idle",
+        "current": 0,
+        "total": 0,
+        "faces_found": 0,
+        "errors": 0,
+        "rate": 0.0,
+        "eta_seconds": 0,
+        "current_file": "",
+        "message": "",
+        "started_at": None,
+        "elapsed_seconds": 0,
+        "photo_seconds": 0.0,
+        "sec_per_img": 0.0,
+    }
+
+_scan_cpu = _scan_template()
+_scan_ov = _scan_template()
 _scan_thread = None
+_scan_thread_backend = None  # "cpu" or "openvino" while scan running
 _scan_stop = threading.Event()
 
 
-def get_db():
+def _run_with_lower_priority(func, *args, **kwargs):
+    """Run func(*args, **kwargs) with thread priority below normal (Windows only).
+    Keeps UI and other processes responsive during long clustering.
+    """
+    if sys.platform != "win32":
+        return func(*args, **kwargs)
+    try:
+        k32 = ctypes.windll.kernel32
+        THREAD_PRIORITY_BELOW_NORMAL = -1
+        THREAD_PRIORITY_NORMAL = 0
+        h = k32.GetCurrentThread()
+        k32.SetThreadPriority(h, THREAD_PRIORITY_BELOW_NORMAL)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            k32.SetThreadPriority(h, THREAD_PRIORITY_NORMAL)
+    except Exception:
+        return func(*args, **kwargs)
+
+
+def get_scan_folders_conn():
+    """Connection to the DB that holds scan_folders and cluster_groups (always main DB)."""
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_db(backend: str | None = None):
+    """Connection to the data DB for current (or given) backend: photos, faces, clusters."""
+    if backend is None:
+        backend = get_backend()
+    path = DB_PATH if backend == "cpu" else DB_PATH_OV
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def _scan_for_backend(backend: str):
+    return _scan_cpu if backend == "cpu" else _scan_ov
 
 def ensure_db():
     DATA_DIR.mkdir(exist_ok=True)
     THUMB_DIR.mkdir(exist_ok=True)
+    THUMB_DIR_OV.mkdir(parents=True, exist_ok=True)
     conn = init_db(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scan_folders (
@@ -79,12 +146,18 @@ def ensure_db():
             name TEXT NOT NULL
         )
     """)
-    # Add group_id column to clusters if missing
     cols = {r[1] for r in conn.execute("PRAGMA table_info(clusters)").fetchall()}
     if "group_id" not in cols:
         conn.execute("ALTER TABLE clusters ADD COLUMN group_id INTEGER REFERENCES cluster_groups(id)")
     conn.commit()
     conn.close()
+    ov_conn = init_db(DB_PATH_OV)
+    cols = {r[1] for r in ov_conn.execute("PRAGMA table_info(clusters)").fetchall()}
+    if "group_id" not in cols:
+        ov_conn.execute("ALTER TABLE clusters ADD COLUMN group_id INTEGER")
+    ov_conn.execute("CREATE TABLE IF NOT EXISTS cluster_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    ov_conn.commit()
+    ov_conn.close()
 
 
 # ── Scan worker ────────────────────────────────────────────────────────────
@@ -106,13 +179,14 @@ def _apply_cpu_limit(cpu_percent):
             pass
 
 
-def _run_scan(folders, det_size, threshold, cpu_percent=60):
+def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
     from insightface.app import FaceAnalysis
+    from face_scan import _face_providers
 
     try:
         _apply_cpu_limit(cpu_percent)
 
-        _scan.update(
+        _scan_ref.update(
             status="loading_model",
             message="Loading face detection model...",
             current=0, total=0, faces_found=0, errors=0,
@@ -121,7 +195,8 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
             elapsed_seconds=0, photo_seconds=0.0, sec_per_img=0.0,
         )
 
-        fa = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        providers = _face_providers()
+        fa = FaceAnalysis(name="buffalo_l", providers=providers)
         fa.prepare(ctx_id=-1, det_size=(det_size, det_size))
 
         conn = init_db(DB_PATH)
@@ -146,14 +221,17 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
 
         new_count = len(files)
         grand_total = prev_photos + new_count
-        _scan.update(status="scanning", total=grand_total, current=prev_photos,
+        _scan_ref.update(status="scanning", total=grand_total, current=prev_photos,
                      faces_found=prev_faces,
                      message=f"Resuming: {new_count} new photos ({prev_photos} already done)...")
 
         if new_count == 0:
-            _scan.update(status="clustering", message="No new photos. Re-clustering...")
-            cluster_faces(conn, threshold)
-            _scan.update(status="done",
+            _scan_ref.update(status="clustering", message="No new photos. Re-clustering...")
+            _run_with_lower_priority(
+                cluster_faces, conn, threshold,
+                progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+            )
+            _scan_ref.update(status="done",
                          message="No new photos found. Clustering complete.")
             conn.close()
             return
@@ -165,10 +243,13 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
         for i, path in enumerate(files):
             if _scan_stop.is_set():
                 done_total = prev_photos + i
-                _scan.update(status="clustering",
+                _scan_ref.update(status="clustering",
                              message=f"Stopped after {done_total}/{grand_total}. Clustering...")
-                cluster_faces(conn, threshold)
-                _scan.update(status="done",
+                _run_with_lower_priority(
+                    cluster_faces, conn, threshold,
+                    progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+                )
+                _scan_ref.update(status="done",
                              message=f"Stopped. {done_total} photos processed, {found} faces clustered.")
                 conn.close()
                 return
@@ -177,7 +258,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
             rate = (i + 1) / elapsed if elapsed > 1 else 0
             eta = (new_count - i - 1) / rate if rate > 0 else 0
             spi = elapsed / (i + 1) if i > 0 else 0
-            _scan.update(current=prev_photos + i + 1, faces_found=found, errors=errs,
+            _scan_ref.update(current=prev_photos + i + 1, faces_found=found, errors=errs,
                          rate=round(rate, 2), eta_seconds=round(eta),
                          elapsed_seconds=round(elapsed),
                          sec_per_img=round(spi, 1),
@@ -192,7 +273,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
                         (str(path), known_hashes[fhash]),
                     )
                     conn.commit()
-                    _scan["photo_seconds"] = round(time.time() - photo_t0, 1)
+                    _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
                     continue
                 found += process_photo(path, conn, fa, file_hash=fhash)
                 known_hashes[fhash] = conn.execute(
@@ -208,23 +289,160 @@ def _run_scan(folders, det_size, threshold, cpu_percent=60):
                     conn.commit()
                 except Exception:
                     pass
-            _scan["photo_seconds"] = round(time.time() - photo_t0, 1)
+            _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
 
             if (i + 1) % 200 == 0 and found > 0:
-                prev_msg = _scan["message"]
-                _scan["message"] = f"Interim clustering after {prev_photos + i + 1} photos..."
-                cluster_faces(conn, threshold)
-                _scan["message"] = prev_msg
+                prev_msg = _scan_ref["message"]
+                _scan_ref["message"] = f"Interim clustering after {prev_photos + i + 1} photos..."
+                _run_with_lower_priority(
+                    cluster_faces, conn, threshold,
+                    progress_cb=lambda d, t: _scan_ref.update(message=f"Interim clustering... {d}/{t} faces"),
+                )
+                _scan_ref["message"] = prev_msg
 
-        _scan.update(current=grand_total, faces_found=found, errors=errs,
+        _scan_ref.update(current=grand_total, faces_found=found, errors=errs,
                      status="clustering", message="Final clustering...")
-        cluster_faces(conn, threshold)
-        _scan.update(status="done",
+        _run_with_lower_priority(
+            cluster_faces, conn, threshold,
+            progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+        )
+        _scan_ref.update(status="done",
                      message=f"Done! {grand_total} photos processed, {found} faces clustered.")
         conn.close()
 
     except Exception as e:
-        _scan.update(status="error", message=str(e))
+        _scan_ref.update(status="error", message=str(e))
+
+
+def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
+    from openvino_pipeline import OpenVINOHybridPipeline, process_photo as ov_process_photo
+
+    try:
+        _apply_cpu_limit(cpu_percent)
+
+        _scan_ref.update(
+            status="loading_model",
+            message="Loading face detection (OpenVINO) and face recognition (InsightFace)…",
+            current=0, total=0, faces_found=0, errors=0,
+            rate=0.0, eta_seconds=0, current_file="",
+            started_at=datetime.now().isoformat(timespec="seconds"),
+            elapsed_seconds=0, photo_seconds=0.0, sec_per_img=0.0,
+        )
+
+        pipeline = OpenVINOHybridPipeline(device="GPU")
+        conn = init_db(DB_PATH_OV)
+        already = {r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()}
+        known_hashes = dict(
+            conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
+        )
+        prev_photos = len(already)
+        prev_faces = conn.execute("SELECT COUNT(*) FROM faces").fetchone()[0]
+
+        files = []
+        for folder in folders:
+            fp = Path(folder)
+            if not fp.is_dir():
+                continue
+            for root, _, names in os.walk(fp):
+                for name in names:
+                    if Path(name).suffix.lower() in PHOTO_EXTENSIONS:
+                        full = Path(root) / name
+                        if str(full) not in already:
+                            files.append(full)
+
+        new_count = len(files)
+        grand_total = prev_photos + new_count
+        _scan_ref.update(status="scanning", total=grand_total, current=prev_photos,
+                     faces_found=prev_faces,
+                     message=f"Resuming: {new_count} new photos ({prev_photos} already done)...")
+
+        if new_count == 0:
+            _scan_ref.update(status="clustering", message="No new photos. Re-clustering...")
+            _run_with_lower_priority(
+                cluster_faces, conn, threshold,
+                progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+            )
+            _scan_ref.update(status="done",
+                         message="No new photos found. Clustering complete.")
+            conn.close()
+            return
+
+        found = prev_faces
+        errs = 0
+        t0 = time.time()
+
+        for i, path in enumerate(files):
+            if _scan_stop.is_set():
+                done_total = prev_photos + i
+                _scan_ref.update(status="clustering",
+                             message=f"Stopped after {done_total}/{grand_total}. Clustering...")
+                _run_with_lower_priority(
+                    cluster_faces, conn, threshold,
+                    progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+                )
+                _scan_ref.update(status="done",
+                             message=f"Stopped. {done_total} photos processed, {found} faces clustered.")
+                conn.close()
+                return
+
+            elapsed = time.time() - t0
+            rate = (i + 1) / elapsed if elapsed > 1 else 0
+            eta = (new_count - i - 1) / rate if rate > 0 else 0
+            spi = elapsed / (i + 1) if i > 0 else 0
+            _scan_ref.update(current=prev_photos + i + 1, faces_found=found, errors=errs,
+                         rate=round(rate, 2), eta_seconds=round(eta),
+                         elapsed_seconds=round(elapsed),
+                         sec_per_img=round(spi, 1),
+                         current_file=path.name)
+
+            photo_t0 = time.time()
+            try:
+                fhash = compute_file_hash(path)
+                if fhash in known_hashes:
+                    conn.execute(
+                        "UPDATE photos SET file_path = ? WHERE id = ?",
+                        (str(path), known_hashes[fhash]),
+                    )
+                    conn.commit()
+                    _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
+                    continue
+                found += ov_process_photo(path, conn, pipeline, THUMB_DIR_OV, file_hash=fhash)
+                known_hashes[fhash] = conn.execute(
+                    "SELECT id FROM photos WHERE file_path = ?", (str(path),)
+                ).fetchone()[0]
+            except Exception:
+                errs += 1
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO photos (file_path, processed_at) VALUES (?, ?)",
+                        (str(path), datetime.now().isoformat()),
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
+            _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
+
+            if (i + 1) % 200 == 0 and found > 0:
+                prev_msg = _scan_ref["message"]
+                _scan_ref["message"] = f"Interim clustering after {prev_photos + i + 1} photos..."
+                _run_with_lower_priority(
+                    cluster_faces, conn, threshold,
+                    progress_cb=lambda d, t: _scan_ref.update(message=f"Interim clustering... {d}/{t} faces"),
+                )
+                _scan_ref["message"] = prev_msg
+
+        _scan_ref.update(current=grand_total, faces_found=found, errors=errs,
+                     status="clustering", message="Final clustering...")
+        _run_with_lower_priority(
+            cluster_faces, conn, threshold,
+            progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+        )
+        _scan_ref.update(status="done",
+                     message=f"Done! {grand_total} photos processed, {found} faces clustered.")
+        conn.close()
+
+    except Exception as e:
+        _scan_ref.update(status="error", message=str(e))
 
 
 # ── Routes: static ─────────────────────────────────────────────────────────
@@ -238,7 +456,8 @@ def index():
 
 @app.route("/thumbs/<path:filename>")
 def serve_thumb(filename):
-    return send_from_directory(str(THUMB_DIR.resolve()), filename)
+    thumb_dir = THUMB_DIR if get_backend() == "cpu" else THUMB_DIR_OV
+    return send_from_directory(str(thumb_dir.resolve()), filename)
 
 
 # ── Routes: filesystem browser ─────────────────────────────────────────────
@@ -285,9 +504,62 @@ def api_browse():
 
 # ── Routes: scan management ────────────────────────────────────────────────
 
+def _openvino_ready():
+    """Check if buffalo_l pack (rec + det for alignment) is present for OpenVINO hybrid. Returns (ok, message)."""
+    try:
+        from openvino_pipeline import _buffalo_dir
+        d = _buffalo_dir()
+        if d is None:
+            return False, (
+                "The GPU Iris Xe (OpenVINO) backend needs the InsightFace buffalo_l model pack. It was not found.\n\n"
+                "To fix:\n"
+                "1. Switch to CPU (InsightFace) and run a short scan (e.g. one folder with a few photos). That will download buffalo_l automatically.\n"
+                "2. Then switch back to GPU Iris Xe (OpenVINO).\n\n"
+                "If you use a custom model path, set the INSIGHTFACE_HOME environment variable before starting the app."
+            )
+        if not (d / "w600k_r50.onnx").exists() or not (d / "det_10g.onnx").exists():
+            return False, (
+                "The GPU Iris Xe (OpenVINO) backend needs the full buffalo_l pack (w600k_r50.onnx and det_10g.onnx for alignment).\n\n"
+                "Run a CPU scan once so InsightFace downloads the full buffalo_l pack, then switch back to GPU Iris Xe (OpenVINO)."
+            )
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+@app.route("/api/backend", methods=["GET"])
+def api_get_backend():
+    return jsonify({"backend": get_backend()})
+
+
+@app.route("/api/openvino/ready", methods=["GET"])
+def api_openvino_ready():
+    """Check if OpenVINO hybrid can run (buffalo_l rec model present)."""
+    ok, message = _openvino_ready()
+    return jsonify({"ready": ok, "message": message})
+
+
+@app.route("/api/backend", methods=["POST"])
+def api_set_backend():
+    global _scan_thread_backend
+    if _scan_thread and _scan_thread.is_alive():
+        return jsonify({"error": "Stop the scan before switching backend"}), 400
+    data = request.json or {}
+    backend = (data.get("backend") or "").strip().lower()
+    if backend not in ("cpu", "openvino"):
+        return jsonify({"error": "backend must be 'cpu' or 'openvino'"}), 400
+    if backend == "openvino":
+        ok, msg = _openvino_ready()
+        if not ok:
+            return jsonify({"error": "OpenVINO backend not ready", "detail": msg}), 400
+    set_backend(backend)
+    _scan_thread_backend = None
+    return jsonify({"ok": True, "backend": backend})
+
+
 @app.route("/api/scan/folders", methods=["GET"])
 def get_folders():
-    conn = get_db()
+    conn = get_scan_folders_conn()
     rows = conn.execute(
         "SELECT id, folder_path, added_at FROM scan_folders ORDER BY id"
     ).fetchall()
@@ -304,7 +576,7 @@ def add_folder():
     p = Path(fp)
     if not p.is_dir():
         return jsonify({"error": f"Not a valid directory: {fp}"}), 400
-    conn = get_db()
+    conn = get_scan_folders_conn()
     try:
         conn.execute(
             "INSERT INTO scan_folders (folder_path, added_at) VALUES (?, ?)",
@@ -320,7 +592,7 @@ def add_folder():
 
 @app.route("/api/scan/folders/<int:fid>", methods=["DELETE"])
 def remove_folder(fid):
-    conn = get_db()
+    conn = get_scan_folders_conn()
     conn.execute("DELETE FROM scan_folders WHERE id = ?", (fid,))
     conn.commit()
     conn.close()
@@ -329,32 +601,59 @@ def remove_folder(fid):
 
 @app.route("/api/scan/start", methods=["POST"])
 def start_scan():
-    global _scan_thread
+    global _scan_thread, _scan_thread_backend
     if _scan_thread and _scan_thread.is_alive():
         return jsonify({"error": "Scan already running"}), 409
+
+    backend = get_backend()
+    _scan_ref = _scan_cpu if backend == "cpu" else _scan_ov
 
     data = request.json or {}
     det_size = int(data.get("det_size", 320))
     threshold = float(data.get("threshold", 0.35))
     cpu_percent = int(data.get("cpu_percent", 60))
 
-    conn = get_db()
+    conn = get_scan_folders_conn()
     rows = conn.execute("SELECT folder_path FROM scan_folders").fetchall()
     conn.close()
     folders = [r["folder_path"] for r in rows]
     if not folders:
         return jsonify({"error": "No folders configured. Add at least one folder."}), 400
 
+    if backend == "openvino":
+        ok, msg = _openvino_ready()
+        if not ok:
+            return jsonify({"error": "OpenVINO backend not ready", "detail": msg}), 400
+
     _scan_stop.clear()
-    _scan_thread = threading.Thread(
-        target=_run_scan, args=(folders, det_size, threshold, cpu_percent), daemon=True,
+    _scan_thread_backend = backend
+    _scan_ref.update(
+        status="loading_model",
+        message="Starting scan…",
+        current=0, total=0, faces_found=0, errors=0,
+        rate=0.0, eta_seconds=0, current_file="",
+        started_at=datetime.now().isoformat(timespec="seconds"),
+        elapsed_seconds=0, photo_seconds=0.0, sec_per_img=0.0,
     )
+    if backend == "cpu":
+        _scan_thread = threading.Thread(
+            target=_run_scan,
+            args=(folders, det_size, threshold, cpu_percent, _scan_ref),
+            daemon=True,
+        )
+    else:
+        _scan_thread = threading.Thread(
+            target=_run_scan_openvino,
+            args=(folders, threshold, cpu_percent, _scan_ref),
+            daemon=True,
+        )
     _scan_thread.start()
     return jsonify({"ok": True})
 
 
 @app.route("/api/scan/stop", methods=["POST"])
 def stop_scan():
+    global _scan_thread_backend
     if not _scan_thread or not _scan_thread.is_alive():
         return jsonify({"error": "No scan running"}), 400
     _scan_stop.set()
@@ -371,36 +670,55 @@ def set_cpu_limit():
 
 @app.route("/api/scan/reset", methods=["POST"])
 def reset_database():
-    """Drop all scan data so the next scan starts from scratch."""
+    """Drop all scan data for the current backend so the next scan starts from scratch."""
+    global _scan_thread_backend
     if _scan_thread and _scan_thread.is_alive():
         return jsonify({"error": "Cannot reset while a scan is running"}), 400
-    conn = get_db()
-    conn.executescript("""
-        DELETE FROM faces;
-        DELETE FROM photos;
-        DELETE FROM clusters;
-        DELETE FROM cluster_groups;
-    """)
-    import shutil
-    thumbs = THUMB_DIR
-    if thumbs.is_dir():
-        shutil.rmtree(thumbs)
-        thumbs.mkdir(parents=True, exist_ok=True)
+    backend = get_backend()
+    conn = get_db(backend)
+    if backend == "cpu":
+        conn.executescript("""
+            DELETE FROM faces;
+            DELETE FROM photos;
+            DELETE FROM clusters;
+            DELETE FROM cluster_groups;
+        """)
+        import shutil
+        if THUMB_DIR.is_dir():
+            shutil.rmtree(THUMB_DIR)
+            THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    else:
+        conn.executescript("""
+            DELETE FROM faces;
+            DELETE FROM photos;
+            DELETE FROM clusters;
+            DELETE FROM cluster_groups;
+        """)
+        import shutil
+        if THUMB_DIR_OV.is_dir():
+            shutil.rmtree(THUMB_DIR_OV)
+            THUMB_DIR_OV.mkdir(parents=True, exist_ok=True)
+    conn.close()
+    _scan_thread_backend = None
     return jsonify({"ok": True})
 
 
 @app.route("/api/scan/status")
 def scan_status():
-    return jsonify(_scan)
+    active = _scan_thread_backend if (_scan_thread and _scan_thread.is_alive()) else None
+    scan_ref = _scan_for_backend(active or get_backend())
+    return jsonify(scan_ref)
 
 
 @app.route("/api/scan/progress")
 def scan_progress():
-    """SSE endpoint — polls _scan dict and pushes changes to the browser."""
+    """SSE endpoint — polls active _scan dict and pushes changes to the browser."""
     def generate():
         prev = None
         while True:
-            cur = json.dumps(_scan)
+            active = _scan_thread_backend if (_scan_thread and _scan_thread.is_alive()) else None
+            scan_ref = _scan_for_backend(active or get_backend())
+            cur = json.dumps(scan_ref)
             if cur != prev:
                 yield f"data: {cur}\n\n"
                 prev = cur
@@ -433,10 +751,12 @@ def api_stats():
 @app.route("/api/scan/pending")
 def scan_pending():
     """Count unprocessed photos and detect data from outside current folders."""
-    conn = get_db()
-    rows = conn.execute("SELECT folder_path FROM scan_folders").fetchall()
-    all_photos = [r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()]
-    conn.close()
+    folders_conn = get_scan_folders_conn()
+    rows = folders_conn.execute("SELECT folder_path FROM scan_folders").fetchall()
+    folders_conn.close()
+    data_conn = get_db()
+    all_photos = [r[0] for r in data_conn.execute("SELECT file_path FROM photos").fetchall()]
+    data_conn.close()
 
     folder_prefixes = [row["folder_path"] for row in rows]
     already = set(all_photos)

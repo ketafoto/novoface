@@ -7,6 +7,9 @@ Usage:
     python face_scan.py "D:\\Photo Archive"
     python face_scan.py "D:\\Photo Archive" --det-size 320   (faster, default)
     python face_scan.py "D:\\Photo Archive" --det-size 640   (more accurate on group photos)
+    python face_scan.py "D:\\Photo Archive" --model buffalo_s   (faster CPU, less accurate)
+
+GPU: NVIDIA only — pip install onnxruntime-gpu (requires CUDA)
 
 Output:
     face_data/faces.db  — SQLite database with face index
@@ -26,6 +29,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -205,11 +209,17 @@ def process_photo(
     return len(detected_faces)
 
 
-def cluster_faces(conn: sqlite3.Connection, threshold: float = 0.35):
+def cluster_faces(
+    conn: sqlite3.Connection,
+    threshold: float = 0.35,
+    progress_cb: Callable[[int, int], None] | None = None,
+):
     """Cluster all faces by cosine similarity using greedy assignment.
 
     InsightFace normed_embedding is L2-normalized, so cosine similarity =
     dot product. A typical same-person threshold is ~0.3-0.4.
+
+    progress_cb(done, total) is called periodically so UI can show progress.
     """
     print("\nClustering faces...")
 
@@ -220,6 +230,8 @@ def cluster_faces(conn: sqlite3.Connection, threshold: float = 0.35):
 
     face_ids = [r[0] for r in rows]
     encodings = [np.frombuffer(r[1], dtype=np.float32) for r in rows]
+    total = len(encodings)
+    report_every = max(1, total // 20)  # ~20 updates over the run
 
     # Preserve manually named clusters and their assignments
     named = conn.execute(
@@ -253,6 +265,12 @@ def cluster_faces(conn: sqlite3.Connection, threshold: float = 0.35):
     next_cluster_id = (conn.execute("SELECT COALESCE(MAX(id),0) FROM clusters").fetchone()[0]) + 1
 
     for i, enc in enumerate(encodings):
+        if (i + 1) % report_every == 0 or i == total - 1:
+            if progress_cb:
+                progress_cb(i + 1, total)
+            else:
+                print(f"  clustering {i + 1}/{total} faces...", end="\r")
+
         if face_ids[i] in assignments:
             continue
 
@@ -284,7 +302,24 @@ def cluster_faces(conn: sqlite3.Connection, threshold: float = 0.35):
     print(f"  {len(encodings)} faces -> {len(cluster_reps)} clusters")
 
 
-def scan_archive(archive_path: Path, det_size: int, threshold: float = 0.35):
+def _face_providers():
+    """Use CUDA (NVIDIA) if available, else CPU. Intel integrated GPUs not supported."""
+    try:
+        import onnxruntime as ort
+        providers = ort.get_available_providers()
+        if "CUDAExecutionProvider" in providers:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    except Exception:
+        pass
+    return ["CPUExecutionProvider"]
+
+
+def scan_archive(
+    archive_path: Path,
+    det_size: int,
+    threshold: float = 0.35,
+    model_name: str = "buffalo_l",
+):
     from insightface.app import FaceAnalysis
 
     DATA_DIR.mkdir(exist_ok=True)
@@ -318,11 +353,9 @@ def scan_archive(archive_path: Path, det_size: int, threshold: float = 0.35):
         conn.close()
         return
 
-    print("Loading face detection model (first run downloads ~300MB)...")
-    face_app = FaceAnalysis(
-        name="buffalo_l",
-        providers=["CPUExecutionProvider"],
-    )
+    providers = _face_providers()
+    print(f"Loading face detection model ({model_name}, {providers[0]})...")
+    face_app = FaceAnalysis(name=model_name, providers=providers)
     face_app.prepare(ctx_id=-1, det_size=(det_size, det_size))
     print("Model ready.\n")
 
@@ -399,13 +432,17 @@ def main():
         "--threshold", type=float, default=0.35,
         help="Clustering similarity threshold (higher=stricter, default 0.35)"
     )
+    parser.add_argument(
+        "--model", choices=("buffalo_l", "buffalo_s"), default="buffalo_l",
+        help="Model: buffalo_l=accurate (default), buffalo_s=faster on CPU"
+    )
     args = parser.parse_args()
 
     if not args.archive.is_dir():
         print(f"Error: {args.archive} is not a directory")
         sys.exit(1)
 
-    scan_archive(args.archive, args.det_size, args.threshold)
+    scan_archive(args.archive, args.det_size, args.threshold, model_name=args.model)
 
 
 if __name__ == "__main__":

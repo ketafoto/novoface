@@ -1,5 +1,7 @@
 insightface
 onnxruntime
+# GPU: pip uninstall onnxruntime && pip install onnxruntime-gpu (NVIDIA + CUDA only)
+# GPU Iris Xe (OpenVINO): pip install openvino openvino-dev  (for omz_downloader)
 opencv-python-headless
 Pillow
 numpy

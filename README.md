@@ -58,10 +58,39 @@ Opens a local web UI at http://localhost:8050 (by default) with two tabs:
 ```bash
 python face_scan.py "D:\Photo Archive"
 python face_scan.py "D:\Photo Archive" --det-size 640 --threshold 0.30
+python face_scan.py "D:\Photo Archive" --model buffalo_s   # faster on CPU, slightly less accurate
 ```
 
 Runs the scan from the command line with terminal progress output.
 The scan is resumable — already-processed files are skipped on re-run.
+
+### Scan and clustering
+
+Scan and clustering run in the **same worker thread**, one after the other. The scan does not wait for “initial clustering”: it loads the model, finds new photos, then either (a) if there are no new photos it re-clusters existing faces and exits, or (b) it processes each photo, runs interim clustering every 200 photos, then runs final clustering at the end. Clustering is not run in parallel with the scan. On Windows, the clustering phase runs at below-normal thread priority so the UI stays responsive.
+
+### Speed and GPU (large archives)
+
+On CPU, scanning can be slow (~10 s/image with `buffalo_l`). For ~100K photos:
+
+- **NVIDIA GPU** — Install [CUDA](https://developer.nvidia.com/cuda-downloads), then:
+  ```bash
+  pip uninstall onnxruntime
+  pip install onnxruntime-gpu
+  ```
+  The app will use CUDA automatically.
+
+- **Intel Iris Xe (experimental)** — **Not needed for the CPU path.** The CPU (InsightFace) backend does not use OpenVINO. Only install it if you want to try the Iris Xe backend. OpenVINO’s dependencies can downgrade numpy/networkx and may conflict with other packages, so use a **separate virtual environment** to try it:
+  ```bash
+  python -m venv .venv-openvino
+  .venv-openvino\Scripts\activate   # Windows
+  pip install -r requirements.txt
+  pip install openvino openvino-dev
+  python scripts/download_openvino_models.py
+  python app.py
+  ```
+  The script downloads the two face models over HTTP (no `omz_downloader` needed; on Windows the OpenVINO model downloader module is often missing). In the Scanner tab, set **Backend** to **GPU Iris Xe (OpenVINO)**. Uses a separate DB (`face_data/faces_ov.db`) and thumbs (`face_data/thumbs_ov/`). Switch back to **CPU (InsightFace)** to restore and resume your normal scan.
+
+- **Faster CPU model** — Use `--model buffalo_s` for quicker CPU scans (some accuracy tradeoff).
 
 ### Standalone review server (legacy)
 

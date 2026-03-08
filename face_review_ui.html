@@ -149,6 +149,8 @@
 
   .settings-row { display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; }
   .setting { display: flex; flex-direction: column; gap: 6px; }
+  .setting.setting-disabled { opacity: 0.55; pointer-events: none; }
+  .setting-hint { font-weight: normal; color: #6b6b8a; text-transform: none; }
   .setting label {
     font-size: 11px;
     text-transform: uppercase;
@@ -294,6 +296,10 @@
   }
   .scan-btn.reset:hover { background: #3a2a1a; }
   .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .scan-btn.busy { animation: scan-btn-busy 0.8s ease-in-out infinite; }
+  @keyframes scan-btn-busy {
+    50% { opacity: 0.75; }
+  }
 
   .scan-done {
     text-align: center;
@@ -661,7 +667,19 @@
       <div class="card-title">Scan Settings</div>
       <div class="settings-row">
         <div class="setting">
-          <label>Detection size
+          <label>Backend
+            <span class="tip-icon">?<span class="tip">
+              <b>CPU (InsightFace):</b> Current pipeline. Use this to resume or review existing scan.<br><br>
+              <b>GPU Iris Xe (OpenVINO):</b> Experimental — uses Intel GPU. Separate DB; switch back to CPU to restore previous state.
+            </span></span>
+          </label>
+          <select id="backend" onchange="switchBackend()">
+            <option value="cpu">CPU (InsightFace)</option>
+            <option value="openvino">GPU Iris Xe (OpenVINO)</option>
+          </select>
+        </div>
+        <div class="setting" id="setting-det-size">
+          <label>Detection size <span id="det-size-hint" class="setting-hint"></span>
             <span class="tip-icon">?<span class="tip">
               Resolution the model uses to find faces in each photo.<br><br>
               <b>Higher (640):</b><br>
@@ -958,6 +976,56 @@ async function selectPickerFolder() {
 
 let scanEventSource = null;
 
+function updateSettingsForBackend() {
+  const backend = (document.getElementById('backend') || {}).value || 'cpu';
+  const detSizeBlock = document.getElementById('setting-det-size');
+  const hint = document.getElementById('det-size-hint');
+  const detSizeSelect = document.getElementById('det-size');
+  if (!detSizeBlock) return;
+  if (backend === 'openvino') {
+    detSizeBlock.classList.add('setting-disabled');
+    if (hint) hint.textContent = '(CPU only)';
+    if (detSizeSelect) detSizeSelect.disabled = true;
+  } else {
+    detSizeBlock.classList.remove('setting-disabled');
+    if (hint) hint.textContent = '';
+    if (detSizeSelect) detSizeSelect.disabled = false;
+  }
+}
+
+async function loadBackend() {
+  const r = await fetch('/api/backend');
+  const data = await r.json();
+  const el = document.getElementById('backend');
+  if (el && data.backend) el.value = data.backend;
+  updateSettingsForBackend();
+}
+
+async function switchBackend() {
+  const el = document.getElementById('backend');
+  const backend = el?.value || 'cpu';
+  const r = await fetch('/api/backend', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({backend}),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    const msg = data.detail || data.error || 'Failed to switch backend';
+    if (data.detail) alert(msg);
+    else showToast(msg);
+    loadBackend();
+    return;
+  }
+  showToast(backend === 'openvino' ? 'Using GPU Iris Xe (OpenVINO)' : 'Using CPU (InsightFace)');
+  updateSettingsForBackend();
+  reviewNeedsRefresh = true;
+  clustersLoaded = false;
+  await loadStats();
+  await updateScanBtnState();
+  updateScanUI(await (await fetch('/api/scan/status')).json());
+}
+
 function connectSSE() {
   if (scanEventSource) return;
   scanEventSource = new EventSource('/api/scan/progress');
@@ -970,7 +1038,39 @@ function connectSSE() {
   };
 }
 
+function showScanStarting() {
+  // Immediate feedback the moment user clicks — no wait for server or model load
+  const progress = document.getElementById('progress-section');
+  const fill = document.getElementById('progress-fill');
+  const statsEl = document.getElementById('progress-stats');
+  const timingEl = document.getElementById('progress-timing');
+  const fileEl = document.getElementById('progress-file');
+  const btn = document.getElementById('scan-btn');
+  const msgEl = document.getElementById('scan-message');
+  progress.style.display = 'block';
+  fill.className = 'progress-fill indeterminate';
+  fill.style.width = '';
+  statsEl.textContent = '';
+  timingEl.textContent = '';
+  fileEl.textContent = 'Starting scan…';
+  btn.textContent = 'Starting…';
+  btn.className = 'scan-btn start';
+  btn.disabled = true;
+  msgEl.innerHTML = '';
+}
+
 async function startScan() {
+  const backendEl = document.getElementById('backend');
+  const backend = backendEl?.value || 'cpu';
+  if (backend === 'openvino') {
+    const readyR = await fetch('/api/openvino/ready');
+    const readyData = await readyR.json();
+    if (!readyData.ready) {
+      alert(readyData.message || 'GPU Iris Xe (OpenVINO) backend is not ready.');
+      return;
+    }
+  }
+
   const detSize = document.getElementById('det-size').value;
   const threshold = document.getElementById('threshold').value;
   const cpuPercent = document.getElementById('cpu-percent').value;
@@ -987,6 +1087,7 @@ async function startScan() {
     }
   }
 
+  showScanStarting();
   const r = await fetch('/api/scan/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -994,14 +1095,32 @@ async function startScan() {
   });
   const data = await r.json();
   if (!r.ok) {
-    showToast(data.error || 'Failed to start');
+    if (data.detail) alert(data.detail);
+    else showToast(data.error || 'Failed to start');
+    updateScanUI({ status: 'idle' });
     return;
   }
   connectSSE();
 }
 
 async function stopScan() {
-  await fetch('/api/scan/stop', {method: 'POST'});
+  const btn = document.getElementById('scan-btn');
+  const prevText = btn.textContent;
+  const prevDisabled = btn.disabled;
+  btn.textContent = 'Pausing…';
+  btn.disabled = true;
+  btn.classList.add('busy');
+  try {
+    await fetch('/api/scan/stop', {method: 'POST'});
+    const statusR = await fetch('/api/scan/status');
+    updateScanUI(await statusR.json());
+  } finally {
+    btn.classList.remove('busy');
+    if (btn.textContent === 'Pausing…') {
+      btn.textContent = prevText;
+      btn.disabled = prevDisabled;
+    }
+  }
 }
 
 async function applyCpuLimit() {
@@ -1023,7 +1142,6 @@ async function resetDatabase() {
     return;
   }
   showToast('Database reset. Ready for a fresh scan.');
-  loadStats();
   clusters = [];
   groups = [];
   clusterFaces = {};
@@ -1031,14 +1149,16 @@ async function resetDatabase() {
   clustersLoaded = false;
   activeCluster = null;
   renderSidebar();
-  document.getElementById('detail').innerHTML = '';
+  document.getElementById('main').innerHTML = '<div class="main-empty">Select a cluster from the sidebar</div>';
   const btn = document.getElementById('scan-btn');
   btn.textContent = 'Start Scan';
   btn.className = 'scan-btn start';
   btn.onclick = startScan;
-  btn.disabled = folders.length === 0;
   document.getElementById('progress-section').style.display = 'none';
   document.getElementById('scan-message').innerHTML = '';
+  await loadStats();
+  await updateScanBtnState();
+  btn.disabled = folders.length === 0;
 }
 
 async function updateScanBtnState() {
@@ -1178,6 +1298,12 @@ async function loadClusters() {
   if (!clustersLoaded) groups.forEach(g => collapsedGroups.add(g.id));
   clustersLoaded = true;
   renderSidebar();
+
+  if (clusters.length === 0) {
+    activeCluster = null;
+    document.getElementById('main').innerHTML = '<div class="main-empty">Select a cluster from the sidebar</div>';
+    return;
+  }
 
   const toLoad = clusters.filter(c => c.face_count > 0 && !firstThumb[c.id]);
   if (toLoad.length === 0) return;
@@ -1544,6 +1670,7 @@ async function doMerge(sourceId, targetId) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function init() {
+  await loadBackend();
   await loadStats();
   await loadFolders();
 
