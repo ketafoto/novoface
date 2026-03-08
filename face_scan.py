@@ -111,11 +111,15 @@ def _years_in_string(s: str) -> list[int]:
     return out
 
 
-def _is_grayscale_image(img) -> bool:
-    """True if image appears B&W (very low color saturation). img: BGR numpy array."""
+def _is_grayscale_image(img, max_side: int = 200) -> bool:
+    """True if image appears B&W (very low color saturation). Uses a small resize to keep cost low."""
     if img is None or img.size == 0:
         return False
     try:
+        h, w = img.shape[:2]
+        if max(h, w) > max_side:
+            scale = max_side / max(h, w)
+            img = cv2.resize(img, (int(w * scale), int(h * scale)))
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mean_sat = float(hsv[:, :, 1].mean())
         return mean_sat < 25
@@ -123,28 +127,30 @@ def _is_grayscale_image(img) -> bool:
         return False
 
 
-def extract_date(file_path: Path, img=None) -> tuple:
+def extract_date(file_path: Path, img=None, exif: dict | None = None) -> tuple:
     """Extract photo date from EXIF, then path/filename heuristics.
 
     When both a path year (e.g. folder 1960e) and a filename year (e.g. IMG_20170430)
     exist, prefers the path year if it is older than the filename year (digitization
     of an old photo: path = original era, filename = when the photo was scanned).
     If img (BGR) is provided and looks B&W, that reinforces preferring the path year.
+    Pass exif from the loader to avoid opening the file again.
     """
-    try:
-        with Image.open(file_path) as pil_img:
-            exif = pil_img._getexif()
-            if exif:
-                try:
-                    for tag_id in (36867, 36868, 306):
-                        val = exif.get(tag_id)
-                        if val:
-                            dt = datetime.strptime(val.strip(), "%Y:%m:%d %H:%M:%S")
-                            return dt.strftime("%Y-%m-%d"), "exif"
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    if exif is None:
+        try:
+            with Image.open(file_path) as pil_img:
+                exif = pil_img._getexif()
+        except Exception:
+            exif = None
+    if exif:
+        try:
+            for tag_id in (36867, 36868, 306):
+                val = exif.get(tag_id)
+                if val:
+                    dt = datetime.strptime(val.strip(), "%Y:%m:%d %H:%M:%S")
+                    return dt.strftime("%Y-%m-%d"), "exif"
+        except Exception:
+            pass
 
     path_str = str(file_path)
     parent_str = str(file_path.parent)
@@ -172,9 +178,23 @@ def extract_date(file_path: Path, img=None) -> tuple:
     return None, None
 
 
-def load_image_cv2(file_path: Path):
-    """Load image as BGR numpy array, handling EXIF orientation."""
+def load_image_cv2(file_path: Path, get_exif: bool = False):
+    """Load image as BGR numpy array. If get_exif=True, return (img, exif). Uses cv2 for decode when possible (faster)."""
     try:
+        if get_exif:
+            img = cv2.imread(str(file_path))
+            if img is not None:
+                try:
+                    with Image.open(file_path) as pil_img:
+                        exif = pil_img._getexif()
+                except Exception:
+                    exif = None
+                return img, exif
+            pil_img = Image.open(file_path)
+            exif = pil_img._getexif()
+            pil_img = pil_img.convert("RGB")
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            return img, exif
         img = cv2.imread(str(file_path))
         if img is None:
             pil_img = Image.open(file_path)
@@ -182,7 +202,7 @@ def load_image_cv2(file_path: Path):
             img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return img
     except Exception:
-        return None
+        return (None, None) if get_exif else None
 
 
 def process_photo(
@@ -192,7 +212,10 @@ def process_photo(
     file_hash: str | None = None,
 ) -> int:
     """Process a single photo. Returns number of faces found."""
-    img = load_image_cv2(file_path)
+    out = load_image_cv2(file_path, get_exif=True)
+    if out is None:
+        return 0
+    img, exif = out
     if img is None:
         return 0
 
@@ -203,7 +226,7 @@ def process_photo(
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
         h, w = img.shape[:2]
 
-    photo_date, date_source = extract_date(file_path, img=img)
+    photo_date, date_source = extract_date(file_path, img=img, exif=exif)
 
     try:
         detected_faces = face_app.get(img)

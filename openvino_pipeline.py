@@ -31,6 +31,7 @@ from face_scan import (
     cluster_faces,
     compute_file_hash,
     extract_date,
+    load_image_cv2,
 )
 
 DB_PATH_OV = DATA_DIR / "faces_ov.db"
@@ -59,18 +60,6 @@ def _find_model(name: str, ext: str = "xml") -> Path | None:
         if found:
             return found[0]
     return None
-
-
-def load_image_cv2(file_path: Path):
-    try:
-        img = cv2.imread(str(file_path))
-        if img is None:
-            pil_img = Image.open(file_path)
-            pil_img = pil_img.convert("RGB")
-            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-        return img
-    except Exception:
-        return None
 
 
 class OpenVINOPipeline:
@@ -297,7 +286,10 @@ def process_photo(
     file_hash: str | None = None,
 ) -> int:
     """Process one photo; same contract as face_scan.process_photo. Returns face count."""
-    img = load_image_cv2(file_path)
+    out = load_image_cv2(file_path, get_exif=True)
+    if out is None:
+        return 0
+    img, exif = out
     if img is None:
         return 0
 
@@ -308,7 +300,7 @@ def process_photo(
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
         h, w = img.shape[:2]
 
-    photo_date, date_source = extract_date(file_path, img=img)
+    photo_date, date_source = extract_date(file_path, img=img, exif=exif)
 
     try:
         faces = pipeline.get_faces(img)
