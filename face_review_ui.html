@@ -1097,6 +1097,28 @@ function showScanStarting() {
   msgEl.innerHTML = '';
 }
 
+function showOrphanChoiceModal(orphanCount) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    overlay.innerHTML = `
+      <div class="modal" onclick="event.stopPropagation()">
+        <h3>Orphan photos in database</h3>
+        <p style="color:#9aa0a6;margin-bottom:16px;font-size:14px">The database contains ${orphanCount} photo(s) from folders not in your current scan list (e.g. a previous test scan).</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+          <button class="btn" id="orphan-keep-btn">Keep data and start scan</button>
+          <button class="btn" style="background:#6b2a2a;color:#fff" id="orphan-reset-btn">Reset database then start scan</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const done = (value) => { overlay.remove(); resolve(value); };
+    overlay.querySelector('#orphan-keep-btn').onclick = () => done(false);
+    overlay.querySelector('#orphan-reset-btn').onclick = () => done(true);
+    overlay.onclick = (e) => { if (e.target === overlay) done(false); };
+  });
+}
+
 async function startScan() {
   const backendEl = document.getElementById('backend');
   const backend = backendEl?.value || 'cpu';
@@ -1116,9 +1138,8 @@ async function startScan() {
   const pendingR = await fetch('/api/scan/pending');
   const {orphan} = await pendingR.json();
   if (orphan > 0) {
-    if (!confirm(`The database contains ${orphan} photo(s) from folders not in your current scan list (e.g. a previous test scan).\n\nClick OK to reset the database first, or Cancel to keep the old data and continue.`)) {
-      // User chose to keep old data — proceed with scan
-    } else {
+    const resetFirst = await showOrphanChoiceModal(orphan);
+    if (resetFirst) {
       const resetR = await fetch('/api/scan/reset', {method: 'POST'});
       if (!resetR.ok) { showToast('Reset failed'); return; }
       showToast('Old data cleared.');
@@ -1171,8 +1192,26 @@ async function applyCpuLimit() {
   showToast(`CPU limit set to ${v}%`);
 }
 
-async function resetDatabase() {
-  if (!confirm('This will delete ALL scan data (photos, faces, clusters, thumbnails) so the next scan starts completely from scratch.\n\nAre you sure?')) return;
+function resetDatabase() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-reset-db';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Reset database?</h3>
+      <p style="color:#9aa0a6;margin-bottom:16px;font-size:14px">This will delete ALL scan data (photos, faces, clusters, thumbnails) so the next scan starts completely from scratch.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn" style="background:#6b2a2a;color:#fff" onclick="confirmResetDatabase()">Reset database</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function confirmResetDatabase() {
+  const overlay = document.getElementById('modal-reset-db');
+  if (overlay) overlay.remove();
   const r = await fetch('/api/scan/reset', {method: 'POST'});
   const data = await r.json();
   if (!r.ok) {
@@ -1486,6 +1525,7 @@ function showClusterContextMenu(e, clusterId) {
   menu.id = 'ctx-menu';
 
   let html = `<div class="ctx-item" onclick="renameClusterFromMenu(${clusterId})">Rename...</div>`;
+  html += `<div class="ctx-item" onclick="clearClusterName(${clusterId})">Clear name</div>`;
   html += '<div class="ctx-divider"></div>';
   html += '<div class="ctx-title">Move to group</div>';
   for (const g of groups) {
@@ -1504,6 +1544,20 @@ function showClusterContextMenu(e, clusterId) {
   menu.style.top = y + 'px';
 
   setTimeout(() => document.addEventListener('click', closeContextMenu, {once: true}), 0);
+}
+
+async function clearClusterName(clusterId) {
+  closeContextMenu();
+  await fetch(`/api/clusters/${clusterId}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: null}),
+  });
+  const c = clusters.find(c => c.id === clusterId);
+  if (c) c.name = null;
+  if (activeCluster && activeCluster.id === clusterId) activeCluster.name = null;
+  renderSidebar();
+  if (activeCluster && activeCluster.id === clusterId) renderDetail();
 }
 
 function renameClusterFromMenu(clusterId) {
@@ -1617,14 +1671,43 @@ async function dropOnGroup(e, groupId) {
   await moveToGroup(clusterId, groupId);
 }
 
-async function moveToNewGroup(clusterId) {
+function moveToNewGroup(clusterId) {
   closeContextMenu();
-  const name = prompt('New group name:');
-  if (!name || !name.trim()) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.dataset.clusterId = String(clusterId);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>New group</h3>
+      <input type="text" id="new-group-name-input" placeholder="Enter group name..."
+             style="width:100%;padding:8px 12px;margin-bottom:16px;background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;color:#e8eaed;font-size:14px">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-save" onclick="confirmNewGroup()">OK</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = document.getElementById('new-group-name-input');
+  input.focus();
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') confirmNewGroup();
+    if (e.key === 'Escape') overlay.remove();
+  };
+}
+
+async function confirmNewGroup() {
+  const overlay = document.querySelector('.modal-overlay[data-cluster-id]');
+  if (!overlay) return;
+  const clusterId = parseInt(overlay.dataset.clusterId, 10);
+  const input = document.getElementById('new-group-name-input');
+  const name = input ? input.value.trim() : '';
+  overlay.remove();
+  if (!name) return;
   const r = await fetch('/api/groups', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name.trim()}),
+    body: JSON.stringify({name}),
   });
   const g = await r.json();
   await loadGroups();
@@ -1691,32 +1774,111 @@ function toggleAllGroups() {
   renderSidebar();
 }
 
-async function promptNewGroup() {
-  const name = prompt('New group name:');
-  if (!name || !name.trim()) return;
+function promptNewGroup() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-new-group';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>New group</h3>
+      <input type="text" id="prompt-new-group-input" placeholder="Enter group name..."
+             style="width:100%;padding:8px 12px;margin-bottom:16px;background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;color:#e8eaed;font-size:14px">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-save" onclick="confirmPromptNewGroup()">OK</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('prompt-new-group-input').focus();
+  document.getElementById('prompt-new-group-input').onkeydown = (e) => {
+    if (e.key === 'Enter') confirmPromptNewGroup();
+    if (e.key === 'Escape') overlay.remove();
+  };
+}
+
+async function confirmPromptNewGroup() {
+  const overlay = document.getElementById('modal-new-group');
+  const input = document.getElementById('prompt-new-group-input');
+  const name = input ? input.value.trim() : '';
+  if (overlay) overlay.remove();
+  if (!name) return;
   await fetch('/api/groups', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name.trim()}),
+    body: JSON.stringify({name}),
   });
   await loadGroups();
   renderSidebar();
 }
 
-async function renameGroup(gid, oldName) {
-  const name = prompt('Rename group:', oldName);
-  if (!name || !name.trim() || name.trim() === oldName) return;
+function renameGroup(gid, oldName) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-rename-group';
+  overlay.dataset.groupId = String(gid);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Rename group</h3>
+      <input type="text" id="rename-group-input" value="${esc(oldName)}" placeholder="Enter name..."
+             style="width:100%;padding:8px 12px;margin-bottom:16px;background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;color:#e8eaed;font-size:14px">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-save" onclick="confirmRenameGroup()">OK</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const inp = document.getElementById('rename-group-input');
+  inp.focus();
+  inp.select();
+  inp.onkeydown = (e) => {
+    if (e.key === 'Enter') confirmRenameGroup();
+    if (e.key === 'Escape') overlay.remove();
+  };
+}
+
+async function confirmRenameGroup() {
+  const overlay = document.getElementById('modal-rename-group');
+  if (!overlay) return;
+  const gid = parseInt(overlay.dataset.groupId, 10);
+  const input = document.getElementById('rename-group-input');
+  const name = input ? input.value.trim() : '';
+  overlay.remove();
+  const g = groups.find(x => x.id === gid);
+  if (!name || (g && g.name === name)) return;
   await fetch(`/api/groups/${gid}`, {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name.trim()}),
+    body: JSON.stringify({name}),
   });
   await loadGroups();
   renderSidebar();
 }
 
-async function deleteGroup(gid) {
-  if (!confirm('Delete this group? Clusters inside will become ungrouped.')) return;
+function deleteGroup(gid) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-delete-group';
+  overlay.dataset.groupId = String(gid);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Delete group?</h3>
+      <p style="color:#9aa0a6;margin-bottom:16px;font-size:14px">Clusters inside will become ungrouped.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn" style="background:#6b2a2a;color:#fff" onclick="confirmDeleteGroup()">Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function confirmDeleteGroup() {
+  const overlay = document.getElementById('modal-delete-group');
+  if (!overlay) return;
+  const gid = parseInt(overlay.dataset.groupId, 10);
+  overlay.remove();
   await fetch(`/api/groups/${gid}`, {method: 'DELETE'});
   clusters.forEach(c => { if (c.group_id === gid) c.group_id = null; });
   await loadGroups();
