@@ -308,7 +308,7 @@ def process_photo(
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
         h, w = img.shape[:2]
 
-    photo_date, date_source = extract_date(file_path)
+    photo_date, date_source = extract_date(file_path, img=img)
 
     try:
         faces = pipeline.get_faces(img)

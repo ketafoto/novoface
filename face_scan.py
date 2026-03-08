@@ -96,31 +96,79 @@ def compute_file_hash(file_path: Path) -> str:
     return h.hexdigest()
 
 
-def extract_date(file_path: Path) -> tuple:
-    """Extract photo date from EXIF, then fall back to folder/filename heuristics."""
+# Same regex for 4-digit years (1890–2040) in path/filename.
+_YEAR_PATTERN = re.compile(r'(?<!\d)(189\d|19\d{2}|20[0-3]\d|2040)(?!\d)')
+
+
+def _years_in_string(s: str) -> list[int]:
+    """Return list of valid 4-digit years found in string (order of appearance)."""
+    current_year = datetime.now().year
+    out = []
+    for m in _YEAR_PATTERN.findall(s):
+        y = int(m)
+        if 1890 <= y <= min(2040, current_year + 5):
+            out.append(y)
+    return out
+
+
+def _is_grayscale_image(img) -> bool:
+    """True if image appears B&W (very low color saturation). img: BGR numpy array."""
+    if img is None or img.size == 0:
+        return False
     try:
-        with Image.open(file_path) as img:
-            exif = img._getexif()
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        mean_sat = float(hsv[:, :, 1].mean())
+        return mean_sat < 25
+    except Exception:
+        return False
+
+
+def extract_date(file_path: Path, img=None) -> tuple:
+    """Extract photo date from EXIF, then path/filename heuristics.
+
+    When both a path year (e.g. folder 1960e) and a filename year (e.g. IMG_20170430)
+    exist, prefers the path year if it is older than the filename year (digitization
+    of an old photo: path = original era, filename = when the photo was scanned).
+    If img (BGR) is provided and looks B&W, that reinforces preferring the path year.
+    """
+    try:
+        with Image.open(file_path) as pil_img:
+            exif = pil_img._getexif()
             if exif:
-                for tag_id in (36867, 36868, 306):
-                    val = exif.get(tag_id)
-                    if val:
-                        dt = datetime.strptime(val.strip(), "%Y:%m:%d %H:%M:%S")
-                        return dt.strftime("%Y-%m-%d"), "exif"
+                try:
+                    for tag_id in (36867, 36868, 306):
+                        val = exif.get(tag_id)
+                        if val:
+                            dt = datetime.strptime(val.strip(), "%Y:%m:%d %H:%M:%S")
+                            return dt.strftime("%Y-%m-%d"), "exif"
+                except Exception:
+                    pass
     except Exception:
         pass
 
     path_str = str(file_path)
-    current_year = datetime.now().year
-    # Find 4-digit years surrounded by non-digit chars (or string edges).
-    # Use the rightmost match — folder names like "Photos\2019\January" put
-    # the most specific year closest to the filename.
-    year_matches = re.findall(r'(?<!\d)(189\d|19\d{2}|20[0-3]\d|2040)(?!\d)', path_str)
-    if year_matches:
-        year = int(year_matches[-1])
-        if 1890 <= year <= min(2040, current_year + 5):
-            return f"{year}", "path"
+    parent_str = str(file_path.parent)
+    name_str = file_path.name
 
+    path_years = _years_in_string(parent_str)
+    name_years = _years_in_string(name_str)
+    path_year = int(path_years[-1]) if path_years else None
+    name_year = int(name_years[-1]) if name_years else None
+
+    if path_year is not None and name_year is not None:
+        # Digitization pattern: path = original era, filename = when digitized.
+        if path_year < name_year:
+            return f"{path_year}", "path"
+        if path_year > name_year:
+            # If image looks B&W, prefer path year (old photo in a newer-named folder).
+            if img is not None and _is_grayscale_image(img):
+                return f"{path_year}", "path"
+            return f"{name_year}", "filename"
+        return f"{path_year}", "path"
+    if path_year is not None:
+        return f"{path_year}", "path"
+    if name_year is not None:
+        return f"{name_year}", "filename"
     return None, None
 
 
@@ -129,7 +177,6 @@ def load_image_cv2(file_path: Path):
     try:
         img = cv2.imread(str(file_path))
         if img is None:
-            # Try PIL for formats cv2 can't handle
             pil_img = Image.open(file_path)
             pil_img = pil_img.convert("RGB")
             img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
@@ -156,7 +203,7 @@ def process_photo(
         img = cv2.resize(img, (int(w * scale), int(h * scale)))
         h, w = img.shape[:2]
 
-    photo_date, date_source = extract_date(file_path)
+    photo_date, date_source = extract_date(file_path, img=img)
 
     try:
         detected_faces = face_app.get(img)
