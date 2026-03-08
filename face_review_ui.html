@@ -70,7 +70,44 @@
   /* ── Views ── */
   .view { display: none; }
   #view-scanner.active { display: block; overflow-y: auto; height: calc(100vh - 56px); }
-  #view-review.active  { display: flex;  height: calc(100vh - 56px); }
+  #view-review.active  { display: flex;  height: calc(100vh - 56px); position: relative; }
+  #review-loading-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(19,21,31,0.92);
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    cursor: wait;
+  }
+  #review-loading-overlay.visible { display: flex; }
+  .review-loading-message {
+    background: #1a1d2a;
+    border: 1px solid #3d4160;
+    border-radius: 12px;
+    padding: 24px 32px;
+    max-width: 360px;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .review-loading-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #e8eaed;
+    margin-bottom: 8px;
+  }
+  .review-loading-detail {
+    font-size: 14px;
+    color: #a5f3c4;
+    margin-bottom: 12px;
+  }
+  .review-loading-warn {
+    font-size: 12px;
+    color: #9aa0a6;
+    line-height: 1.4;
+  }
 
   /* ── Scanner View ── */
   .scanner-content {
@@ -369,7 +406,7 @@
     font-size: 13px; font-weight: 600; color: #c0c0e0;
   }
   .group-header:hover { background: #1e2130; }
-  .group-header.drag-over, .group-divider.drag-over {
+  .group-header.drag-over, .group-divider.drag-over, .cluster-item.drag-over {
     background: #1a2a1a; outline: 2px dashed #a5f3c4; outline-offset: -2px;
   }
   .group-arrow { font-size: 10px; color: #6b6b8a; width: 12px; }
@@ -762,6 +799,7 @@
   <div class="main" id="main">
     <div class="main-empty">Select a cluster from the sidebar</div>
   </div>
+  <div id="review-loading-overlay" aria-live="polite"></div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -1297,6 +1335,10 @@ async function loadClusters() {
   groups = await gr.json();
   if (!clustersLoaded) groups.forEach(g => collapsedGroups.add(g.id));
   clustersLoaded = true;
+  // Re-bind activeCluster to the current clusters array so we never use a stale reference
+  if (activeCluster) {
+    activeCluster = clusters.find(c => c.id === activeCluster.id) || null;
+  }
   renderSidebar();
 
   if (clusters.length === 0) {
@@ -1309,6 +1351,7 @@ async function loadClusters() {
   if (toLoad.length === 0) return;
 
   _thumbsLoading = true;
+  updateReviewLoadingOverlay();
   for (let i = 0; i < toLoad.length; i += 10) {
     const batch = toLoad.slice(i, i + 10);
     await Promise.all(batch.map(async c => {
@@ -1317,11 +1360,31 @@ async function loadClusters() {
       if (faces.length > 0) firstThumb[c.id] = `/thumbs/${faces[0].thumb_path}`;
     }));
     _thumbsProgress = `Loading thumbnails... ${Math.min(i + 10, toLoad.length)}/${toLoad.length}`;
+    updateReviewLoadingOverlay();
     renderSidebar();
   }
   _thumbsLoading = false;
   _thumbsProgress = '';
+  updateReviewLoadingOverlay();
   renderSidebar();
+}
+
+function updateReviewLoadingOverlay() {
+  const el = document.getElementById('review-loading-overlay');
+  if (!el) return;
+  if (_thumbsLoading) {
+    const detail = _thumbsProgress || 'Loading thumbnails…';
+    el.innerHTML = `
+      <div class="review-loading-message">
+        <div class="review-loading-title">Please wait</div>
+        <div class="review-loading-detail">${esc(detail)}</div>
+        <div class="review-loading-warn">Moving photos and other actions are disabled until loading finishes.</div>
+      </div>`;
+    el.classList.add('visible');
+  } else {
+    el.classList.remove('visible');
+    el.innerHTML = '';
+  }
 }
 
 function sortClusters(list) {
@@ -1343,7 +1406,10 @@ function clusterItemHtml(c) {
          onclick="selectCluster(${c.id})"
          oncontextmenu="event.preventDefault();showClusterContextMenu(event,${c.id})"
          draggable="true"
-         ondragstart="event.dataTransfer.setData('text/plain','${c.id}')">
+         ondragstart="event.dataTransfer.setData('text/plain','${c.id}')"
+         ondragover="clusterItemDragover(event)"
+         ondragleave="event.currentTarget.classList.remove('drag-over')"
+         ondrop="event.preventDefault();event.stopPropagation();event.currentTarget.classList.remove('drag-over');dropFaceOnCluster(event,${c.id})">
       <div class="thumb-stack">
         ${thumb ? `<img src="${thumb}" alt="">` : ''}
       </div>
@@ -1352,6 +1418,48 @@ function clusterItemHtml(c) {
         <div class="count">${c.face_count} photo${c.face_count !== 1 ? 's' : ''}${c.birth_year ? ' \u00b7 b.' + c.birth_year : ''}</div>
       </div>
     </div>`;
+}
+
+function startFaceDrag(ev, faceId) {
+  if (_thumbsLoading) {
+    ev.preventDefault();
+    return;
+  }
+  ev.dataTransfer.setData('text/plain', 'face:' + faceId);
+  ev.dataTransfer.effectAllowed = 'move';
+}
+
+function clusterItemDragover(e) {
+  if (_thumbsLoading) return;
+  // Browsers often don't expose getData() until drop, so allow drop on cluster rows
+  // and validate in dropFaceOnCluster (face:... vs cluster id).
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+
+async function dropFaceOnCluster(e, targetClusterId) {
+  if (_thumbsLoading) return;
+  const data = e.dataTransfer.getData('text/plain');
+  if (!data || !data.startsWith('face:')) return;
+  const faceId = parseInt(data.slice(5), 10);
+  if (isNaN(faceId)) return;
+  if (!activeCluster || targetClusterId === activeCluster.id) return;
+  const r = await fetch(`/api/faces/${faceId}/move`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cluster_id: targetClusterId}),
+  });
+  if (!r.ok) {
+    showToast('Move failed');
+    return;
+  }
+  delete clusterFaces[activeCluster.id];
+  delete clusterFaces[targetClusterId];
+  await loadClusters();
+  renderSidebar();
+  renderDetail();
+  showToast('Photo moved to cluster');
 }
 
 function showClusterContextMenu(e, clusterId) {
@@ -1526,7 +1634,7 @@ function renderDetail() {
   const faces = clusterFaces[c.id] || [];
 
   let html = `
-    <div class="detail-header">
+    <div class="detail-header" data-cluster-id="${c.id}">
       <div class="field">
         <label>Person name</label>
         <input type="text" id="inp-name" value="${esc(c.name || '')}"
@@ -1565,11 +1673,14 @@ function renderDetail() {
     }
     const shortPath = f.file_path.length > 50
       ? '...' + f.file_path.slice(-47) : f.file_path;
+    const faceId = f.face_id != null ? f.face_id : f.id;
 
     html += `
       <div class="face-card" onclick="copyPath('${escJs(f.file_path)}')"
-           title="Click to copy path:\n${esc(f.file_path)}">
-        <img src="/thumbs/${f.thumb_path}" alt="face" loading="lazy">
+           title="Click to copy path. Drag to a cluster in the sidebar to move this photo there."
+           draggable="true"
+           ondragstart="startFaceDrag(event,${faceId})">
+        <img src="/thumbs/${f.thumb_path}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
           <span class="date">${year}</span>
           ${ageStr ? `<span class="age">${ageStr}</span>` : ''}
@@ -1598,20 +1709,32 @@ async function assignGroup() {
 }
 
 async function saveCluster() {
-  if (!activeCluster) return;
+  const header = document.querySelector('.detail-header[data-cluster-id]');
+  const clusterId = header ? parseInt(header.getAttribute('data-cluster-id'), 10) : (activeCluster && activeCluster.id);
+  if (clusterId == null || isNaN(clusterId)) return;
   const name = document.getElementById('inp-name').value.trim() || null;
   const birthStr = document.getElementById('inp-birth').value.trim();
   const birth_year = birthStr ? parseInt(birthStr) : null;
 
-  await fetch(`/api/clusters/${activeCluster.id}`, {
+  const r = await fetch(`/api/clusters/${clusterId}`, {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name, birth_year}),
   });
-  activeCluster.name = name;
-  activeCluster.birth_year = birth_year;
-  const idx = clusters.findIndex(c => c.id === activeCluster.id);
-  if (idx >= 0) clusters[idx] = {...clusters[idx], name, birth_year};
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.error || 'Save failed');
+    return;
+  }
+  const c = clusters.find(c => c.id === clusterId);
+  if (c) {
+    c.name = name;
+    c.birth_year = birth_year;
+  }
+  if (activeCluster && activeCluster.id === clusterId) {
+    activeCluster.name = name;
+    activeCluster.birth_year = birth_year;
+  }
   renderSidebar();
   renderDetail();
   loadStats();

@@ -240,6 +240,20 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
         errs = 0
         t0 = time.time()
 
+        # If we have faces but no clusters (e.g. server was restarted before pause-handler ran clustering),
+        # run clustering once so Review shows data without waiting for the next interim run.
+        if prev_faces > 0:
+            n_clusters = conn.execute(
+                "SELECT COUNT(*) FROM clusters WHERE merged_into IS NULL"
+            ).fetchone()[0]
+            if n_clusters == 0:
+                _scan_ref.update(status="clustering",
+                             message="Re-clustering existing faces…")
+                _run_with_lower_priority(
+                    cluster_faces, conn, threshold,
+                    progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+                )
+
         for i, path in enumerate(files):
             if _scan_stop.is_set():
                 done_total = prev_photos + i
@@ -370,6 +384,20 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
         found = prev_faces
         errs = 0
         t0 = time.time()
+
+        # If we have faces but no clusters (e.g. server was restarted before pause-handler ran clustering),
+        # run clustering once so Review shows data without waiting for the next interim run.
+        if prev_faces > 0:
+            n_clusters = conn.execute(
+                "SELECT COUNT(*) FROM clusters WHERE merged_into IS NULL"
+            ).fetchone()[0]
+            if n_clusters == 0:
+                _scan_ref.update(status="clustering",
+                             message="Re-clustering existing faces…")
+                _run_with_lower_priority(
+                    cluster_faces, conn, threshold,
+                    progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
+                )
 
         for i, path in enumerate(files):
             if _scan_stop.is_set():
