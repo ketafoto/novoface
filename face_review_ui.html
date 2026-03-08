@@ -1319,6 +1319,7 @@ let groups = [];
 let activeCluster = null;
 let clusterFaces = {};
 let firstThumb = {};
+let detailThumbCache = {};  // thumb_path -> data URL for current detail pane
 let collapsedGroups = new Set();
 
 let _thumbsLoading = false;
@@ -1358,9 +1359,26 @@ async function loadClusters() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cluster_ids: ids }),
   });
-  const thumbs = await r.json();
-  for (const [cid, thumbPath] of Object.entries(thumbs)) {
-    if (thumbPath) firstThumb[parseInt(cid, 10)] = `/thumbs/${thumbPath}`;
+  const pathByCid = await r.json();
+  const paths = Object.values(pathByCid).filter(Boolean);
+  if (paths.length > 0) {
+    const tr = await fetch('/api/thumbs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+    const base64ByPath = await tr.json();
+    for (const [cid, thumbPath] of Object.entries(pathByCid)) {
+      if (!thumbPath) continue;
+      const b64 = base64ByPath[thumbPath];
+      firstThumb[parseInt(cid, 10)] = b64
+        ? `data:image/jpeg;base64,${b64}`
+        : `/thumbs/${thumbPath}`;
+    }
+  } else {
+    for (const [cid, thumbPath] of Object.entries(pathByCid)) {
+      if (thumbPath) firstThumb[parseInt(cid, 10)] = `/thumbs/${thumbPath}`;
+    }
   }
   _thumbsLoading = false;
   _thumbsProgress = '';
@@ -1457,7 +1475,7 @@ async function dropFaceOnCluster(e, targetClusterId) {
   delete clusterFaces[targetClusterId];
   await loadClusters();
   renderSidebar();
-  renderDetail();
+  await selectCluster(activeCluster.id);
   showToast('Photo moved to cluster');
 }
 
@@ -1624,6 +1642,21 @@ async function selectCluster(id) {
     const r = await fetch(`/api/clusters/${id}/faces`);
     clusterFaces[id] = await r.json();
   }
+  const faces = clusterFaces[id] || [];
+  const paths = faces.map(f => f.thumb_path).filter(Boolean);
+  detailThumbCache = {};
+  for (let i = 0; i < paths.length; i += 10) {
+    const chunk = paths.slice(i, i + 10);
+    const tr = await fetch('/api/thumbs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: chunk }),
+    });
+    const base64ByPath = await tr.json();
+    for (const [p, b64] of Object.entries(base64ByPath)) {
+      if (b64) detailThumbCache[p] = `data:image/jpeg;base64,${b64}`;
+    }
+  }
   renderDetail();
 }
 
@@ -1679,7 +1712,7 @@ function renderDetail() {
            title="Click to copy path. Drag to a cluster in the sidebar to move this photo there."
            draggable="true"
            ondragstart="startFaceDrag(event,${faceId})">
-        <img src="/thumbs/${f.thumb_path}" alt="face" loading="lazy" draggable="false">
+        <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
           <span class="date">${year}</span>
           ${ageStr ? `<span class="age">${ageStr}</span>` : ''}

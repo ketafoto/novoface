@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import base64
 import ctypes
 import json
 import os
@@ -485,7 +486,32 @@ def index():
 @app.route("/thumbs/<path:filename>")
 def serve_thumb(filename):
     thumb_dir = THUMB_DIR if get_backend() == "cpu" else THUMB_DIR_OV
-    return send_from_directory(str(thumb_dir.resolve()), filename)
+    resp = send_from_directory(str(thumb_dir.resolve()), filename)
+    resp.headers["Cache-Control"] = "public, max-age=86400"  # 1 day
+    return resp
+
+
+@app.route("/api/thumbs", methods=["POST"])
+def api_thumbs_batch():
+    """Return multiple thumb images as base64. Body: {"paths": ["a.jpg", "b.jpg", ...]}. Max 200 paths."""
+    data = request.get_json(silent=True) or {}
+    paths = data.get("paths") or []
+    if not paths or len(paths) > 200:
+        return jsonify({})
+    thumb_dir = Path(THUMB_DIR if get_backend() == "cpu" else THUMB_DIR_OV)
+    thumb_dir = thumb_dir.resolve()
+    out = {}
+    for p in paths:
+        if ".." in p or p.startswith("/"):
+            continue
+        path = (thumb_dir / p).resolve()
+        if not str(path).startswith(str(thumb_dir)) or not path.is_file():
+            continue
+        try:
+            out[p] = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError:
+            pass
+    return jsonify(out)
 
 
 # ── Routes: filesystem browser ─────────────────────────────────────────────
