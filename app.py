@@ -849,6 +849,20 @@ def api_clusters():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/clusters", methods=["POST"])
+def api_create_cluster():
+    """Create an empty cluster; returns { \"id\": new_id }."""
+    conn = get_db()
+    next_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM clusters").fetchone()[0] + 1
+    conn.execute(
+        "INSERT INTO clusters (id, name, birth_year, merged_into, group_id) VALUES (?, NULL, NULL, NULL, NULL)",
+        (next_id,),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"id": next_id})
+
+
 @app.route("/api/clusters/first-faces", methods=["POST"])
 def api_clusters_first_faces():
     """Return one thumb_path per cluster (first face by date/path). Request body: {"cluster_ids": [1,2,...]}."""

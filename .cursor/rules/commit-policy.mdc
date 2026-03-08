@@ -3,6 +3,12 @@ description: Git commit policy — one commit per functional change
 alwaysApply: true
 ---
 
+## Mandatory: no commit or push without approval
+
+- **Do not run `git commit` or `git push` until the user has explicitly approved the commit message.**
+- Correct sequence: (1) propose the full commit message text, (2) stop and wait, (3) only after the user says to proceed (e.g. "go ahead", "OK", "approved") run `git add` / `git commit` / `git push`.
+- If the user asks to "commit and push" or "show me the commit message before commit", that means: show the message first, then wait for approval; do not commit or push in the same response.
+
 ## Commit Granularity
 
 - **One commit per functional change or enhancement.** Each commit should cover

@@ -1485,7 +1485,9 @@ function showClusterContextMenu(e, clusterId) {
   menu.className = 'ctx-menu';
   menu.id = 'ctx-menu';
 
-  let html = '<div class="ctx-title">Move to group</div>';
+  let html = `<div class="ctx-item" onclick="renameClusterFromMenu(${clusterId})">Rename...</div>`;
+  html += '<div class="ctx-divider"></div>';
+  html += '<div class="ctx-title">Move to group</div>';
   for (const g of groups) {
     html += `<div class="ctx-item" onclick="moveToGroup(${clusterId},${g.id})">${esc(g.name)}</div>`;
   }
@@ -1502,6 +1504,92 @@ function showClusterContextMenu(e, clusterId) {
   menu.style.top = y + 'px';
 
   setTimeout(() => document.addEventListener('click', closeContextMenu, {once: true}), 0);
+}
+
+function renameClusterFromMenu(clusterId) {
+  closeContextMenu();
+  const c = clusters.find(c => c.id === clusterId);
+  const currentName = (c && c.name) || '';
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.dataset.clusterId = String(clusterId);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Rename cluster</h3>
+      <input type="text" id="rename-cluster-input" value="${esc(currentName)}" placeholder="Enter name..."
+             style="width:100%;padding:8px 12px;margin-bottom:16px;background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;color:#e8eaed;font-size:14px">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button class="btn btn-save" onclick="confirmRenameCluster()">OK</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = document.getElementById('rename-cluster-input');
+  input.focus();
+  input.select();
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') confirmRenameCluster();
+    if (e.key === 'Escape') overlay.remove();
+  };
+}
+
+async function confirmRenameCluster() {
+  const overlay = document.querySelector('.modal-overlay[data-cluster-id]');
+  if (!overlay) return;
+  const clusterId = parseInt(overlay.dataset.clusterId, 10);
+  const input = document.getElementById('rename-cluster-input');
+  const name = input ? input.value.trim() : '';
+  overlay.remove();
+  await fetch(`/api/clusters/${clusterId}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name || null}),
+  });
+  const c = clusters.find(c => c.id === clusterId);
+  if (c) c.name = name || null;
+  if (activeCluster && activeCluster.id === clusterId) activeCluster.name = name || null;
+  renderSidebar();
+  if (activeCluster && activeCluster.id === clusterId) renderDetail();
+}
+
+function showFaceContextMenu(e, faceId) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'ctx-menu';
+  menu.innerHTML = `<div class="ctx-item" onclick="addFaceToNewCluster(${faceId})">Add to new cluster</div>`;
+  document.body.appendChild(menu);
+  const x = Math.min(e.clientX, window.innerWidth - 200);
+  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10);
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  setTimeout(() => document.addEventListener('click', closeContextMenu, {once: true}), 0);
+}
+
+async function addFaceToNewCluster(faceId) {
+  closeContextMenu();
+  if (_thumbsLoading) return;
+  const cr = await fetch('/api/clusters', { method: 'POST', headers: {'Content-Type': 'application/json'} });
+  const data = await cr.json();
+  const newClusterId = data.id;
+  if (!newClusterId) {
+    showToast('Failed to create cluster');
+    return;
+  }
+  const r = await fetch(`/api/faces/${faceId}/move`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({cluster_id: newClusterId}),
+  });
+  if (!r.ok) {
+    showToast('Move failed');
+    return;
+  }
+  delete clusterFaces[activeCluster.id];
+  await loadClusters();
+  await selectCluster(newClusterId);
+  showToast('Photo moved to new cluster');
 }
 
 function closeContextMenu() {
@@ -1709,9 +1797,10 @@ function renderDetail() {
 
     html += `
       <div class="face-card" onclick="copyPath('${escJs(f.file_path)}')"
-           title="Click to copy path. Drag to a cluster in the sidebar to move this photo there."
+           title="Click to copy path. Drag to a cluster in the sidebar to move this photo there. Right-click for menu."
            draggable="true"
-           ondragstart="startFaceDrag(event,${faceId})">
+           ondragstart="startFaceDrag(event,${faceId})"
+           oncontextmenu="event.preventDefault();event.stopPropagation();showFaceContextMenu(event,${faceId})">
         <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
           <span class="date">${year}</span>
