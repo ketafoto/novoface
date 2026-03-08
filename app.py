@@ -823,6 +823,33 @@ def api_clusters():
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/clusters/first-faces", methods=["POST"])
+def api_clusters_first_faces():
+    """Return one thumb_path per cluster (first face by date/path). Request body: {"cluster_ids": [1,2,...]}."""
+    data = request.get_json(silent=True) or {}
+    ids = data.get("cluster_ids") or []
+    if not ids:
+        return jsonify({})
+    conn = get_db()
+    placeholders = ",".join("?" * len(ids))
+    q = f"""
+        WITH ordered AS (
+            SELECT f.cluster_id, f.thumb_path,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY f.cluster_id
+                       ORDER BY p.photo_date IS NULL, p.photo_date, p.file_path
+                   ) AS rn
+            FROM faces f
+            JOIN photos p ON p.id = f.photo_id
+            WHERE f.cluster_id IN ({placeholders})
+        )
+        SELECT cluster_id, thumb_path FROM ordered WHERE rn = 1
+    """
+    rows = conn.execute(q, ids).fetchall()
+    conn.close()
+    return jsonify({str(r["cluster_id"]): r["thumb_path"] for r in rows})
+
+
 @app.route("/api/clusters/<int:cid>/faces")
 def api_cluster_faces(cid):
     limit = request.args.get("limit", type=int)

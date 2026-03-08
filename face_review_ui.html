@@ -1352,16 +1352,15 @@ async function loadClusters() {
 
   _thumbsLoading = true;
   updateReviewLoadingOverlay();
-  for (let i = 0; i < toLoad.length; i += 10) {
-    const batch = toLoad.slice(i, i + 10);
-    await Promise.all(batch.map(async c => {
-      const fr = await fetch(`/api/clusters/${c.id}/faces?limit=1`);
-      const faces = await fr.json();
-      if (faces.length > 0) firstThumb[c.id] = `/thumbs/${faces[0].thumb_path}`;
-    }));
-    _thumbsProgress = `Loading thumbnails... ${Math.min(i + 10, toLoad.length)}/${toLoad.length}`;
-    updateReviewLoadingOverlay();
-    renderSidebar();
+  const ids = toLoad.map(c => c.id);
+  const r = await fetch('/api/clusters/first-faces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cluster_ids: ids }),
+  });
+  const thumbs = await r.json();
+  for (const [cid, thumbPath] of Object.entries(thumbs)) {
+    if (thumbPath) firstThumb[parseInt(cid, 10)] = `/thumbs/${thumbPath}`;
   }
   _thumbsLoading = false;
   _thumbsProgress = '';
