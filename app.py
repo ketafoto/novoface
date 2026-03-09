@@ -30,6 +30,7 @@ from face_scan import (
     DB_PATH,
     THUMB_DIR,
     PHOTO_EXTENSIONS,
+    connect_db,
     init_db,
     process_photo,
     cluster_faces,
@@ -113,7 +114,7 @@ def _run_with_lower_priority(func, *args, **kwargs):
 
 def get_scan_folders_conn():
     """Connection to the DB that holds scan_folders and cluster_groups (always main DB)."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = connect_db(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -122,7 +123,7 @@ def get_db(backend: str | None = None):
     if backend is None:
         backend = get_backend()
     path = DB_PATH if backend == "cpu" else DB_PATH_OV
-    conn = sqlite3.connect(str(path))
+    conn = connect_db(path)
     conn.row_factory = sqlite3.Row
     return conn
 

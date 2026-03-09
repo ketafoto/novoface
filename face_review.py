@@ -16,6 +16,7 @@ from pathlib import Path
 from threading import Timer
 
 from flask import Flask, jsonify, request, send_from_directory, send_file
+from face_scan import connect_db
 
 DATA_DIR = Path("face_data")
 DB_PATH = DATA_DIR / "faces.db"
@@ -25,7 +26,7 @@ app = Flask(__name__)
 
 
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = connect_db(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -1512,6 +1512,8 @@ async function dropFaceOnCluster(e, targetClusterId) {
   }
   delete clusterFaces[activeCluster.id];
   delete clusterFaces[targetClusterId];
+  delete firstThumb[activeCluster.id];
+  delete firstThumb[targetClusterId];
   await loadClusters();
   renderSidebar();
   await selectCluster(activeCluster.id);
@@ -1641,6 +1643,7 @@ async function addFaceToNewCluster(faceId) {
     return;
   }
   delete clusterFaces[activeCluster.id];
+  delete firstThumb[activeCluster.id];
   await loadClusters();
   await selectCluster(newClusterId);
   showToast('Photo moved to new cluster');
@@ -1893,6 +1896,21 @@ async function selectCluster(id) {
     clusterFaces[id] = await r.json();
   }
   const faces = clusterFaces[id] || [];
+  if (faces.length > 0) {
+    const thumbPathsInCluster = new Set(faces.map(f => f.thumb_path).filter(Boolean));
+    const currentThumb = firstThumb[id];
+    let needUpdate = false;
+    if (currentThumb && currentThumb.startsWith('/thumbs/')) {
+      const path = currentThumb.slice(8);
+      if (!thumbPathsInCluster.has(path)) needUpdate = true;
+    } else if (currentThumb && currentThumb.startsWith('data:')) {
+      needUpdate = true;
+    }
+    if (needUpdate) {
+      firstThumb[id] = `/thumbs/${faces[0].thumb_path}`;
+      renderSidebar();
+    }
+  }
   const paths = faces.map(f => f.thumb_path).filter(Boolean);
   detailThumbCache = {};
   for (let i = 0; i < paths.length; i += 10) {

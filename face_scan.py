@@ -41,11 +41,19 @@ THUMB_DIR = DATA_DIR / "thumbs"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 THUMB_SIZE = 150
 FACE_MARGIN = 0.5
+SQLITE_BUSY_TIMEOUT_MS = 30000
+
+
+def connect_db(db_path: Path) -> sqlite3.Connection:
+    """Open SQLite with settings that tolerate concurrent UI + scan access."""
+    conn = sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 
 def init_db(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn = connect_db(db_path)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS photos (
             id INTEGER PRIMARY KEY,
@@ -316,13 +324,9 @@ def cluster_faces(
     ).fetchall()
     pinned = {r[0]: r[1] for r in named_face_rows}
 
-    # Clear old clustering
-    conn.execute("UPDATE faces SET cluster_id = NULL")
-    conn.execute("DELETE FROM clusters WHERE name IS NULL AND merged_into IS NULL")
-    conn.commit()
-
     cluster_reps = []  # list of (cluster_db_id, [list of encoding indices])
     assignments = {}
+    new_cluster_ids = []
 
     # Seed with named clusters
     for cid, info in named_map.items():
@@ -360,13 +364,49 @@ def cluster_faces(
             indices.append(i)
             assignments[face_ids[i]] = cid
         else:
-            conn.execute("INSERT INTO clusters (id) VALUES (?)", (next_cluster_id,))
             cluster_reps.append((next_cluster_id, [i]))
             assignments[face_ids[i]] = next_cluster_id
+            new_cluster_ids.append(next_cluster_id)
             next_cluster_id += 1
 
-    for face_id, cluster_id in assignments.items():
-        conn.execute("UPDATE faces SET cluster_id = ? WHERE id = ?", (cluster_id, face_id))
+    # Build the new assignments in a temp table first so the main DB write lock
+    # is held only for the short final apply phase.
+    conn.execute("DROP TABLE IF EXISTS temp.cluster_assignments")
+    conn.execute("""
+        CREATE TEMP TABLE cluster_assignments (
+            face_id INTEGER PRIMARY KEY,
+            cluster_id INTEGER NOT NULL
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO cluster_assignments (face_id, cluster_id) VALUES (?, ?)",
+        assignments.items(),
+    )
+    conn.commit()
+
+    conn.execute("BEGIN IMMEDIATE")
+    if new_cluster_ids:
+        conn.executemany(
+            "INSERT INTO clusters (id) VALUES (?)",
+            ((cid,) for cid in new_cluster_ids),
+        )
+    conn.execute("""
+        UPDATE faces
+        SET cluster_id = (
+            SELECT ca.cluster_id
+            FROM cluster_assignments ca
+            WHERE ca.face_id = faces.id
+        )
+        WHERE id IN (SELECT face_id FROM cluster_assignments)
+    """)
+    conn.execute("""
+        DELETE FROM clusters
+        WHERE name IS NULL
+          AND merged_into IS NULL
+          AND id NOT IN (SELECT DISTINCT cluster_id FROM cluster_assignments)
+    """)
+    conn.commit()
+    conn.execute("DROP TABLE temp.cluster_assignments")
     conn.commit()
 
     print(f"  {len(encodings)} faces -> {len(cluster_reps)} clusters")
