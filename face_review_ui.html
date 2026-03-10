@@ -1164,20 +1164,33 @@ async function startScan() {
 
 async function stopScan() {
   const btn = document.getElementById('scan-btn');
-  const prevText = btn.textContent;
-  const prevDisabled = btn.disabled;
-  btn.textContent = 'Pausing…';
+  btn.textContent = 'Stopping…';
   btn.disabled = true;
   btn.classList.add('busy');
   try {
     await fetch('/api/scan/stop', {method: 'POST'});
-    const statusR = await fetch('/api/scan/status');
-    updateScanUI(await statusR.json());
-  } finally {
+    // Don't immediately re-poll status here: the thread may still be alive
+    // (processing the current image) and a re-poll would show 'scanning' again,
+    // making it look like nothing happened. SSE will push the actual state change.
+    // Fallback: if SSE doesn't deliver an update within 8 s, poll manually.
+    setTimeout(async () => {
+      if (btn.textContent === 'Stopping…') {
+        btn.classList.remove('busy');
+        try {
+          const statusR = await fetch('/api/scan/status');
+          updateScanUI(await statusR.json());
+        } catch (_) {}
+      }
+    }, 8000);
+  } catch (_) {
+    // Network error — poll immediately so button doesn't stay stuck.
     btn.classList.remove('busy');
-    if (btn.textContent === 'Pausing…') {
-      btn.textContent = prevText;
-      btn.disabled = prevDisabled;
+    try {
+      const statusR = await fetch('/api/scan/status');
+      updateScanUI(await statusR.json());
+    } catch (_2) {
+      btn.textContent = 'Pause Scan';
+      btn.disabled = false;
     }
   }
 }
@@ -1257,6 +1270,7 @@ async function updateScanBtnState() {
 
 function updateScanUI(s) {
   const btn = document.getElementById('scan-btn');
+  btn.classList.remove('busy');  // clear any in-progress stop animation
   const resetBtn = document.getElementById('reset-btn');
   const progress = document.getElementById('progress-section');
   const fill = document.getElementById('progress-fill');

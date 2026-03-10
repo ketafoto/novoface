@@ -756,7 +756,13 @@ def start_scan():
 def stop_scan():
     global _scan_thread_backend
     if not _scan_thread or not _scan_thread.is_alive():
-        return jsonify({"error": "No scan running"}), 400
+        # Thread is already dead — if status is stuck in an active state,
+        # reset it so the UI can recover (e.g. after a C-level thread crash).
+        scan_ref = _scan_for_backend(_scan_thread_backend or get_backend())
+        if scan_ref.get("status") in ("scanning", "loading_model", "clustering"):
+            scan_ref.update(status="idle", message="")
+            _scan_thread_backend = None
+        return jsonify({"ok": True})
     _scan_stop.set()
     return jsonify({"ok": True})
 
@@ -819,6 +825,12 @@ def scan_progress():
         while True:
             active = _scan_thread_backend if (_scan_thread and _scan_thread.is_alive()) else None
             scan_ref = _scan_for_backend(active or get_backend())
+            # If the thread died but status is still 'active', emit an error so
+            # the browser can recover from a stuck "Pause Scan" state.
+            if active is None and scan_ref.get("status") in ("scanning", "loading_model", "clustering"):
+                scan_ref = dict(scan_ref)
+                scan_ref["status"] = "error"
+                scan_ref["message"] = "Scan process ended unexpectedly"
             cur = json.dumps(scan_ref)
             if cur != prev:
                 yield f"data: {cur}\n\n"
