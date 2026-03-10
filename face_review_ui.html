@@ -1370,59 +1370,79 @@ async function loadGroups() {
 }
 
 async function loadClusters() {
-  const [cr, gr] = await Promise.all([fetch('/api/clusters'), fetch('/api/groups')]);
-  clusters = await cr.json();
-  groups = await gr.json();
-  if (!clustersLoaded) groups.forEach(g => collapsedGroups.add(g.id));
-  clustersLoaded = true;
-  // Re-bind activeCluster to the current clusters array so we never use a stale reference
-  if (activeCluster) {
-    activeCluster = clusters.find(c => c.id === activeCluster.id) || null;
-  }
-  renderSidebar();
-
-  if (clusters.length === 0) {
-    activeCluster = null;
-    document.getElementById('main').innerHTML = '<div class="main-empty">Select a cluster from the sidebar</div>';
-    return;
-  }
-
-  const toLoad = clusters.filter(c => c.face_count > 0 && !firstThumb[c.id]);
-  if (toLoad.length === 0) return;
-
   _thumbsLoading = true;
+  _thumbsProgress = 'Loading clusters…';
   updateReviewLoadingOverlay();
-  const ids = toLoad.map(c => c.id);
-  const r = await fetch('/api/clusters/first-faces', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cluster_ids: ids }),
-  });
-  const pathByCid = await r.json();
-  const paths = Object.values(pathByCid).filter(Boolean);
-  if (paths.length > 0) {
-    const tr = await fetch('/api/thumbs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths }),
-    });
-    const base64ByPath = await tr.json();
-    for (const [cid, thumbPath] of Object.entries(pathByCid)) {
-      if (!thumbPath) continue;
-      const b64 = base64ByPath[thumbPath];
-      firstThumb[parseInt(cid, 10)] = b64
-        ? `data:image/jpeg;base64,${b64}`
-        : `/thumbs/${thumbPath}`;
+  try {
+    const [cr, gr] = await Promise.all([fetch('/api/clusters'), fetch('/api/groups')]);
+    clusters = await cr.json();
+    groups = await gr.json();
+    if (!clustersLoaded) groups.forEach(g => collapsedGroups.add(g.id));
+    clustersLoaded = true;
+    // Re-bind activeCluster to the current clusters array so we never use a stale reference
+    if (activeCluster) {
+      activeCluster = clusters.find(c => c.id === activeCluster.id) || null;
     }
-  } else {
-    for (const [cid, thumbPath] of Object.entries(pathByCid)) {
-      if (thumbPath) firstThumb[parseInt(cid, 10)] = `/thumbs/${thumbPath}`;
+
+    if (clusters.length === 0) {
+      activeCluster = null;
+      document.getElementById('main').innerHTML = '<div class="main-empty">Select a cluster from the sidebar</div>';
+      return;
     }
+
+    const toLoad = clusters.filter(c => c.face_count > 0 && !firstThumb[c.id]);
+    if (toLoad.length > 0) {
+      _thumbsProgress = `Loading thumbnails (${toLoad.length} clusters)…`;
+      updateReviewLoadingOverlay();
+      const ids = toLoad.map(c => c.id);
+      const r = await fetch('/api/clusters/first-faces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cluster_ids: ids }),
+      });
+      const pathByCid = await r.json();
+      const paths = Object.values(pathByCid).filter(Boolean);
+      if (paths.length > 0) {
+        _thumbsProgress = `Fetching ${paths.length} thumbnails…`;
+        updateReviewLoadingOverlay();
+        const tr = await fetch('/api/thumbs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths }),
+        });
+        const base64ByPath = await tr.json();
+        for (const [cid, thumbPath] of Object.entries(pathByCid)) {
+          if (!thumbPath) continue;
+          const b64 = base64ByPath[thumbPath];
+          firstThumb[parseInt(cid, 10)] = b64
+            ? `data:image/jpeg;base64,${b64}`
+            : `/thumbs/${thumbPath}`;
+        }
+      } else {
+        for (const [cid, thumbPath] of Object.entries(pathByCid)) {
+          if (thumbPath) firstThumb[parseInt(cid, 10)] = `/thumbs/${thumbPath}`;
+        }
+      }
+
+      // Preload any /thumbs/ URL fallbacks so the browser caches them before
+      // the sidebar renders — prevents a burst of GET requests after overlay clears.
+      const fallbackUrls = Object.values(firstThumb).filter(u => u.startsWith('/thumbs/'));
+      if (fallbackUrls.length > 0) {
+        _thumbsProgress = `Loading ${fallbackUrls.length} images…`;
+        updateReviewLoadingOverlay();
+        await Promise.all(fallbackUrls.map(url => new Promise(resolve => {
+          const img = new Image();
+          img.onload = img.onerror = resolve;
+          img.src = url;
+        })));
+      }
+    }
+  } finally {
+    _thumbsLoading = false;
+    _thumbsProgress = '';
+    updateReviewLoadingOverlay();
+    renderSidebar();
   }
-  _thumbsLoading = false;
-  _thumbsProgress = '';
-  updateReviewLoadingOverlay();
-  renderSidebar();
 }
 
 function updateReviewLoadingOverlay() {
