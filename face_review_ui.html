@@ -2051,12 +2051,15 @@ function copyPath(filePath) {
 function showMergeModal() {
   if (!activeCluster) return;
   const others = clusters.filter(c => c.id !== activeCluster.id);
+  const named = others.filter(c => c.name).sort((a, b) => a.name.localeCompare(b.name));
+  const unnamed = others.filter(c => !c.name).sort((a, b) => b.face_count - a.face_count);
+  const sorted = [...named, ...unnamed];
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 
   let items = '';
-  for (const c of others) {
+  for (const c of sorted) {
     const name = c.name || 'Unnamed';
     const thumb = firstThumb[c.id] || '';
     items += `
