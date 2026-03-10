@@ -165,12 +165,15 @@ def ensure_db():
 # ── Scan worker ────────────────────────────────────────────────────────────
 
 def _apply_cpu_limit(cpu_percent):
-    """Limit this process to cpu_percent% of total CPU.
+    """Limit this process to cpu_percent% of total CPU and lower its I/O priority.
 
-    Windows: uses a Job Object with JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
-    which is the OS-level hard rate limiter (accurate, no priority penalty).
-    Linux: falls back to cpulimit-style nice; proper cgroup limiting would
-    require root and is out of scope here.
+    Windows:
+      - CPU: Job Object with JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP — accurate
+        OS-level rate limiter.
+      - I/O: THREAD_MODE_BACKGROUND_BEGIN on the calling thread — tells the OS
+        to satisfy all I/O requests from this thread at background (lowest)
+        priority, so photo file reads don't compete with interactive I/O.
+    Linux: falls back to nice(10); proper cgroup limiting would require root.
     """
     cpu_percent = max(5, min(100, int(cpu_percent)))
 
@@ -219,6 +222,16 @@ def _apply_cpu_limit(cpu_percent):
             # Nested job objects are supported on Win8+; older systems or
             # already-constrained environments may fail — log and continue.
             print(f"[cpu_limit] Job Object failed ({e}); no CPU cap applied.")
+
+        # Lower I/O priority for this thread so photo reads don't compete
+        # with interactive/system I/O.  THREAD_MODE_BACKGROUND_BEGIN sets
+        # I/O priority to VeryLow for all I/O issued by this thread.
+        try:
+            THREAD_MODE_BACKGROUND_BEGIN = 0x00010000
+            kernel32.SetThreadPriority(kernel32.GetCurrentThread(),
+                                       THREAD_MODE_BACKGROUND_BEGIN)
+        except Exception:
+            pass
     else:
         try:
             import psutil
