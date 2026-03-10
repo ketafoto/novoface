@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import atexit
 import base64
 import ctypes
 import json
@@ -47,6 +48,31 @@ except ImportError:
 app = Flask(__name__)
 
 BACKEND_CONFIG = DATA_DIR / "backend.json"
+
+
+def _cleanup_children():
+    """Terminate any child processes spawned by this process (e.g. OpenVINO workers).
+    Registered with atexit so it runs on normal exit and Ctrl-C.
+    """
+    try:
+        import psutil
+        children = psutil.Process().children(recursive=True)
+        for ch in children:
+            try:
+                ch.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(children, timeout=3)
+        for ch in alive:
+            try:
+                ch.kill()
+            except psutil.NoSuchProcess:
+                pass
+    except Exception:
+        pass
+
+
+atexit.register(_cleanup_children)
 
 def get_backend() -> str:
     """Current backend: 'cpu' (InsightFace) or 'openvino' (Iris Xe)."""
