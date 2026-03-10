@@ -292,51 +292,50 @@ def cluster_faces(
     threshold: float = 0.35,
     progress_cb: Callable[[int, int], None] | None = None,
 ):
-    """Cluster all faces by cosine similarity using greedy assignment.
+    """Cluster faces that have no assignment yet (cluster_id IS NULL).
+	Clusterisation is done by cosine similarity using greedy assignment.
 
     InsightFace normed_embedding is L2-normalized, so cosine similarity =
     dot product. A typical same-person threshold is ~0.3-0.4.
+
+    Faces already assigned to any cluster — by a previous clustering run or by
+    a manual merge in the UI — are never reassigned.  This prevents interim /
+    pause-triggered re-clustering from overwriting manual work.
 
     progress_cb(done, total) is called periodically so UI can show progress.
     """
     print("\nClustering faces...")
 
-    rows = conn.execute("SELECT id, encoding FROM faces ORDER BY id").fetchall()
+    rows = conn.execute("SELECT id, encoding, cluster_id FROM faces ORDER BY id").fetchall()
     if not rows:
         print("No faces to cluster.")
         return
 
-    face_ids = [r[0] for r in rows]
+    face_ids  = [r[0] for r in rows]
     encodings = [np.frombuffer(r[1], dtype=np.float32) for r in rows]
+    cur_cluster = [r[2] for r in rows]   # current cluster_id; None for new faces
     total = len(encodings)
-    report_every = max(1, total // 20)  # ~20 updates over the run
+    report_every = max(1, total // 20)   # ~20 progress updates over the run
 
-    # Preserve manually named clusters and their assignments
-    named = conn.execute(
-        "SELECT id, name, birth_year FROM clusters WHERE name IS NOT NULL"
-    ).fetchall()
-    named_map = {r[0]: {"name": r[1], "birth_year": r[2]} for r in named}
-
-    named_face_rows = conn.execute(
-        "SELECT f.id, f.cluster_id, f.encoding FROM faces f "
-        "JOIN clusters c ON c.id = f.cluster_id "
-        "WHERE c.name IS NOT NULL"
-    ).fetchall()
-    pinned = {r[0]: r[1] for r in named_face_rows}
-
-    cluster_reps = []  # list of (cluster_db_id, [list of encoding indices])
-    assignments = {}
-    new_cluster_ids = []
-
-    # Seed with named clusters
-    for cid, info in named_map.items():
-        indices = [i for i, fid in enumerate(face_ids) if fid in pinned and pinned[fid] == cid]
-        if indices:
-            cluster_reps.append((cid, indices))
-            for idx in indices:
-                assignments[face_ids[idx]] = cid
+    # Build cluster representatives from every face that already has an assignment.
+    # This seeds the greedy matcher with the full current state of the DB so that
+    # newly-detected faces land in the right person's cluster.
+    cluster_reps = []   # list of (cluster_db_id, [encoding indices])
+    seen_clusters: dict[int, int] = {}   # cluster_id -> index in cluster_reps
+    for i, cid in enumerate(cur_cluster):
+        if cid is None:
+            continue
+        if cid not in seen_clusters:
+            seen_clusters[cid] = len(cluster_reps)
+            cluster_reps.append((cid, [i]))
+        else:
+            cluster_reps[seen_clusters[cid]][1].append(i)
 
     next_cluster_id = (conn.execute("SELECT COALESCE(MAX(id),0) FROM clusters").fetchone()[0]) + 1
+
+    # assignments holds ONLY newly-assigned faces (those that were NULL).
+    assignments: dict[int, int] = {}
+    new_cluster_ids: list[int] = []
 
     for i, enc in enumerate(encodings):
         if (i + 1) % report_every == 0 or i == total - 1:
@@ -345,8 +344,8 @@ def cluster_faces(
             else:
                 print(f"  clustering {i + 1}/{total} faces...", end="\r")
 
-        if face_ids[i] in assignments:
-            continue
+        if cur_cluster[i] is not None:
+            continue   # already assigned — never overwrite
 
         best_cluster = None
         best_sim = threshold
@@ -369,6 +368,10 @@ def cluster_faces(
             new_cluster_ids.append(next_cluster_id)
             next_cluster_id += 1
 
+    if not assignments:
+        print("  No unassigned faces found.")
+        return
+
     # Build the new assignments in a temp table first so the main DB write lock
     # is held only for the short final apply phase.
     conn.execute("DROP TABLE IF EXISTS temp.cluster_assignments")
@@ -390,6 +393,8 @@ def cluster_faces(
             "INSERT INTO clusters (id) VALUES (?)",
             ((cid,) for cid in new_cluster_ids),
         )
+    # Guard: only write to faces that are still unassigned in the DB.
+    # If the user merged a face while we were computing, their assignment wins.
     conn.execute("""
         UPDATE faces
         SET cluster_id = (
@@ -398,18 +403,20 @@ def cluster_faces(
             WHERE ca.face_id = faces.id
         )
         WHERE id IN (SELECT face_id FROM cluster_assignments)
+          AND cluster_id IS NULL
     """)
     conn.execute("""
         DELETE FROM clusters
         WHERE name IS NULL
           AND merged_into IS NULL
+          AND id NOT IN (SELECT DISTINCT cluster_id FROM faces WHERE cluster_id IS NOT NULL)
           AND id NOT IN (SELECT DISTINCT cluster_id FROM cluster_assignments)
     """)
     conn.commit()
     conn.execute("DROP TABLE temp.cluster_assignments")
     conn.commit()
 
-    print(f"  {len(encodings)} faces -> {len(cluster_reps)} clusters")
+    print(f"  {len(assignments)} new faces assigned, {len(cluster_reps)} clusters total")
 
 
 def _face_providers():
