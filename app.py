@@ -165,19 +165,65 @@ def ensure_db():
 # ── Scan worker ────────────────────────────────────────────────────────────
 
 def _apply_cpu_limit(cpu_percent):
-    """Restrict this process to a subset of CPU cores and lower priority."""
-    import psutil
-    p = psutil.Process()
-    total_cores = psutil.cpu_count()
-    use_cores = max(1, round(total_cores * cpu_percent / 100))
-    all_cpus = list(range(total_cores))
-    p.cpu_affinity(all_cpus[:use_cores])
+    """Limit this process to cpu_percent% of total CPU.
+
+    Windows: uses a Job Object with JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+    which is the OS-level hard rate limiter (accurate, no priority penalty).
+    Linux: falls back to cpulimit-style nice; proper cgroup limiting would
+    require root and is out of scope here.
+    """
+    cpu_percent = max(5, min(100, int(cpu_percent)))
+
     if os.name == "nt":
-        p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            kernel32 = ctypes.windll.kernel32
+
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE   = 0x1
+            JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP = 0x4
+            JobObjectCpuRateControlInformation   = 15
+
+            class JOBOBJECT_CPU_RATE_CONTROL_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("ControlFlags", ctypes.wintypes.DWORD),
+                    # CpuRate: portion of cycles allowed, in units of 1/100 of a percent.
+                    # 80 % -> 8000, 100 % -> 10000.
+                    ("CpuRate",      ctypes.wintypes.DWORD),
+                ]
+
+            hJob = kernel32.CreateJobObjectW(None, None)
+            if not hJob:
+                raise ctypes.WinError()
+
+            info = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION()
+            info.ControlFlags = (JOB_OBJECT_CPU_RATE_CONTROL_ENABLE |
+                                 JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP)
+            info.CpuRate = cpu_percent * 100  # e.g. 80 % -> 8000
+
+            ok = kernel32.SetInformationJobObject(
+                hJob,
+                JobObjectCpuRateControlInformation,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+            if not ok:
+                raise ctypes.WinError()
+
+            hProcess = kernel32.GetCurrentProcess()
+            if not kernel32.AssignProcessToJobObject(hJob, hProcess):
+                raise ctypes.WinError()
+
+        except OSError as e:
+            # Nested job objects are supported on Win8+; older systems or
+            # already-constrained environments may fail — log and continue.
+            print(f"[cpu_limit] Job Object failed ({e}); no CPU cap applied.")
     else:
         try:
-            p.nice(10)
-        except PermissionError:
+            import psutil
+            psutil.Process().nice(10)
+        except (PermissionError, AttributeError):
             pass
 
 
