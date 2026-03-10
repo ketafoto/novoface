@@ -1442,11 +1442,18 @@ async function loadClusters() {
       // the sidebar renders — prevents a burst of GET requests after overlay clears.
       const fallbackUrls = Object.values(firstThumb).filter(u => u.startsWith('/thumbs/'));
       if (fallbackUrls.length > 0) {
-        _thumbsProgress = `Loading ${fallbackUrls.length} images…`;
+        let loadedCount = 0;
+        const total = fallbackUrls.length;
+        _thumbsProgress = `Loading images: 0 / ${total}`;
         updateReviewLoadingOverlay();
         await Promise.all(fallbackUrls.map(url => new Promise(resolve => {
           const img = new Image();
-          img.onload = img.onerror = resolve;
+          img.onload = img.onerror = () => {
+            loadedCount++;
+            _thumbsProgress = `Loading images: ${loadedCount} / ${total}`;
+            updateReviewLoadingOverlay();
+            resolve();
+          };
           img.src = url;
         })));
       }
@@ -1464,12 +1471,19 @@ function updateReviewLoadingOverlay() {
   if (!el) return;
   if (_thumbsLoading) {
     const detail = _thumbsProgress || 'Loading thumbnails…';
-    el.innerHTML = `
-      <div class="review-loading-message">
-        <div class="review-loading-title">Please wait</div>
-        <div class="review-loading-detail">${esc(detail)}</div>
-        <div class="review-loading-warn">Moving photos and other actions are disabled until loading finishes.</div>
-      </div>`;
+    // If the structure is already rendered, only update the detail text to
+    // avoid rebuilding the DOM (prevents flicker during rapid counter updates).
+    const existing = el.querySelector('.review-loading-detail');
+    if (existing) {
+      existing.textContent = detail;
+    } else {
+      el.innerHTML = `
+        <div class="review-loading-message">
+          <div class="review-loading-title">Please wait</div>
+          <div class="review-loading-detail">${esc(detail)}</div>
+          <div class="review-loading-warn">Moving photos and other actions are disabled until loading finishes.</div>
+        </div>`;
+    }
     el.classList.add('visible');
   } else {
     el.classList.remove('visible');
