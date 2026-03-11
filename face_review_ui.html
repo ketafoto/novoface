@@ -1120,6 +1120,8 @@ function showOrphanChoiceModal(orphanCount) {
 }
 
 async function startScan() {
+  showScanStarting();  // Immediate feedback — disable button before any async work
+
   const backendEl = document.getElementById('backend');
   const backend = backendEl?.value || 'cpu';
   if (backend === 'openvino') {
@@ -1127,6 +1129,7 @@ async function startScan() {
     const readyData = await readyR.json();
     if (!readyData.ready) {
       alert(readyData.message || 'GPU Iris Xe (OpenVINO) backend is not ready.');
+      updateScanUI({ status: 'idle' });
       return;
     }
   }
@@ -1141,12 +1144,10 @@ async function startScan() {
     const resetFirst = await showOrphanChoiceModal(orphan);
     if (resetFirst) {
       const resetR = await fetch('/api/scan/reset', {method: 'POST'});
-      if (!resetR.ok) { showToast('Reset failed'); return; }
+      if (!resetR.ok) { showToast('Reset failed'); updateScanUI({ status: 'idle' }); return; }
       showToast('Old data cleared.');
     }
   }
-
-  showScanStarting();
   const r = await fetch('/api/scan/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
