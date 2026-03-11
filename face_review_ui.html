@@ -813,6 +813,7 @@ let currentTab = 'scanner';
 let clustersLoaded = false;
 let reviewNeedsRefresh = false;
 let _lastScanStatus = 'idle';
+let _cachedOrphanCount = 0;  // updated by updateScanBtnState(), reused by startScan()
 
 function switchTab(tab) {
   currentTab = tab;
@@ -1138,9 +1139,8 @@ async function startScan() {
   const threshold = document.getElementById('threshold').value;
   const cpuPercent = document.getElementById('cpu-percent').value;
 
-  const pendingR = await fetch('/api/scan/pending');
-  const {orphan} = await pendingR.json();
-  if (orphan > 0) {
+  if (_cachedOrphanCount > 0) {
+    const orphan = _cachedOrphanCount;
     const resetFirst = await showOrphanChoiceModal(orphan);
     if (resetFirst) {
       const resetR = await fetch('/api/scan/reset', {method: 'POST'});
@@ -1258,11 +1258,15 @@ async function updateScanBtnState() {
   btn.disabled = folders.length === 0;
   if (folders.length === 0) { btn.textContent = 'Start Scan'; return; }
 
+  btn.textContent = 'Checking folders…';
+  btn.disabled = true;
   const [statsR, pendingR] = await Promise.all([
     fetch('/api/stats'), fetch('/api/scan/pending'),
   ]);
   const stats = await statsR.json();
-  const {pending} = await pendingR.json();
+  const {pending, orphan} = await pendingR.json();
+  _cachedOrphanCount = orphan || 0;
+  btn.disabled = false;
 
   if (stats.photos === 0)       btn.textContent = 'Start Scan';
   else if (pending > 0)         btn.textContent = `Resume Scan (${pending} left)`;
@@ -1304,19 +1308,21 @@ function updateScanUI(s) {
   } else if (s.status === 'scanning') {
     progress.style.display = 'block';
     const pct = s.total > 0 ? ((s.current / s.total) * 100).toFixed(1) : 0;
-    fill.className = 'progress-fill';
-    fill.style.width = pct + '%';
-    statsEl.innerHTML =
-      `<span>${s.current}</span> / ${s.total} photos &middot; ` +
-      `<span>${s.faces_found}</span> faces &middot; ` +
-      `<span>${s.errors}</span> errors`;
-    timingEl.innerHTML =
-      `Elapsed: <span>${formatDuration(s.elapsed_seconds)}</span> &middot; ` +
-      `${s.sec_per_img}s/img &middot; ` +
-      `last: ${s.photo_seconds}s &middot; ` +
-      `ETA: <span>${formatEta(s.eta_seconds)}</span>` +
-      (s.started_at ? ` &middot; started ${s.started_at.replace('T', ' ')}` : '');
-    fileEl.textContent = s.current_file;
+    fill.className = s.total > 0 ? 'progress-fill' : 'progress-fill indeterminate';
+    fill.style.width = s.total > 0 ? pct + '%' : '';
+    statsEl.innerHTML = s.total > 0
+      ? `<span>${s.current}</span> / ${s.total} photos &middot; ` +
+        `<span>${s.faces_found}</span> faces &middot; ` +
+        `<span>${s.errors}</span> errors`
+      : esc(s.message || 'Checking…');
+    timingEl.innerHTML = s.total > 0
+      ? `Elapsed: <span>${formatDuration(s.elapsed_seconds)}</span> &middot; ` +
+        `${s.sec_per_img}s/img &middot; ` +
+        `last: ${s.photo_seconds}s &middot; ` +
+        `ETA: <span>${formatEta(s.eta_seconds)}</span>` +
+        (s.started_at ? ` &middot; started ${s.started_at.replace('T', ' ')}` : '')
+      : '';
+    fileEl.textContent = s.total > 0 ? s.current_file : '';
     btn.textContent = 'Pause Scan';
     btn.className = 'scan-btn stop';
     btn.onclick = stopScan;
