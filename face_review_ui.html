@@ -1407,15 +1407,21 @@ async function loadClusters() {
 
     const toLoad = clusters.filter(c => c.face_count > 0 && !firstThumb[c.id]);
     if (toLoad.length > 0) {
-      _thumbsProgress = `Loading thumbnails (${toLoad.length} clusters)…`;
-      updateReviewLoadingOverlay();
       const ids = toLoad.map(c => c.id);
-      const r = await fetch('/api/clusters/first-faces', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cluster_ids: ids }),
-      });
-      const pathByCid = await r.json();
+      const BATCH = 200;
+      const pathByCid = {};
+      for (let i = 0; i < ids.length; i += BATCH) {
+        const loaded = Math.min(i + BATCH, ids.length);
+        _thumbsProgress = `Loading thumbnails… ${loaded} / ${ids.length}`;
+        updateReviewLoadingOverlay();
+        const chunk = ids.slice(i, i + BATCH);
+        const r = await fetch('/api/clusters/first-faces', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cluster_ids: chunk }),
+        });
+        Object.assign(pathByCid, await r.json());
+      }
       const paths = Object.values(pathByCid).filter(Boolean);
       if (paths.length > 0) {
         _thumbsProgress = `Fetching ${paths.length} thumbnails…`;
