@@ -1258,19 +1258,9 @@ async function updateScanBtnState() {
   btn.disabled = folders.length === 0;
   if (folders.length === 0) { btn.textContent = 'Start Scan'; return; }
 
-  btn.textContent = 'Checking folders…';
-  btn.disabled = true;
-  const [statsR, pendingR] = await Promise.all([
-    fetch('/api/stats'), fetch('/api/scan/pending'),
-  ]);
+  const statsR = await fetch('/api/stats');
   const stats = await statsR.json();
-  const {pending, orphan} = await pendingR.json();
-  _cachedOrphanCount = orphan || 0;
-  btn.disabled = false;
-
-  if (stats.photos === 0)       btn.textContent = 'Start Scan';
-  else if (pending > 0)         btn.textContent = `Resume Scan (${pending} left)`;
-  else                          btn.textContent = 'Scan for New';
+  btn.textContent = stats.photos === 0 ? 'Start Scan' : 'Scan for New';
 }
 
 function updateScanUI(s) {
@@ -1351,9 +1341,10 @@ function updateScanUI(s) {
     btn.className = 'scan-btn start';
     btn.onclick = startScan;
     btn.disabled = folders.length === 0;
-    btn.textContent = 'Scan for New';
+    const remaining = (s.total || 0) - (s.current || 0);
+    btn.textContent = remaining > 0 ? `Resume Scan (${remaining} left)` : 'Scan for New';
+    _cachedOrphanCount = 0;  // scan just ran — no new orphans
     loadStats();
-    updateScanBtnState();
     reviewNeedsRefresh = true;
     document.querySelector('[data-tab="review"]').classList.add('has-update');
   } else if (s.status === 'error') {
