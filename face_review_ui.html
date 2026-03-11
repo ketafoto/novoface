@@ -1344,6 +1344,7 @@ function updateScanUI(s) {
     btn.className = 'scan-btn start';
     btn.onclick = startScan;
     btn.disabled = folders.length === 0;
+    btn.textContent = 'Scan for New';
     loadStats();
     updateScanBtnState();
     reviewNeedsRefresh = true;

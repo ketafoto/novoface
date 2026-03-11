@@ -52,6 +52,12 @@ scan_folders   : id, folder_path, added_at  ← in faces.db only (always the CPU
 - CPU capped via `_apply_cpu_limit(cpu_percent)` — Windows Job Object HARD_CAP
 - I/O priority lowered via `THREAD_MODE_BACKGROUND_BEGIN` on the scan thread
 
+**Hash-duplicate handling (fixed 2026-03-11):**
+- When a file's hash matches an already-processed file, the scan does `INSERT OR IGNORE`
+  for the new path instead of `UPDATE`-ing the existing record's path.
+- This prevents a permanent flip-flop where two files with the same content (e.g. the same
+  photo in two archive folders) would alternately orphan each other from the DB on every scan.
+
 ### cluster_faces() — face_scan.py:290
 Auto-assigns faces to clusters by greedy cosine similarity (ArcFace embeddings).
 

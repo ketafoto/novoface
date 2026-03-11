@@ -369,9 +369,11 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
             try:
                 fhash = compute_file_hash(path)
                 if fhash in known_hashes:
+                    # Same content already processed under a different path.
+                    # Record this path too so it never shows as pending again.
                     conn.execute(
-                        "UPDATE photos SET file_path = ? WHERE id = ?",
-                        (str(path), known_hashes[fhash]),
+                        "INSERT OR IGNORE INTO photos (file_path, file_hash, processed_at) VALUES (?, ?, ?)",
+                        (str(path), fhash, datetime.now().isoformat()),
                     )
                     conn.commit()
                     _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
@@ -514,9 +516,11 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
             try:
                 fhash = compute_file_hash(path)
                 if fhash in known_hashes:
+                    # Same content already processed under a different path.
+                    # Record this path too so it never shows as pending again.
                     conn.execute(
-                        "UPDATE photos SET file_path = ? WHERE id = ?",
-                        (str(path), known_hashes[fhash]),
+                        "INSERT OR IGNORE INTO photos (file_path, file_hash, processed_at) VALUES (?, ?, ?)",
+                        (str(path), fhash, datetime.now().isoformat()),
                     )
                     conn.commit()
                     _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
