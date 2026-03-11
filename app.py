@@ -424,15 +424,14 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
         _apply_cpu_limit(cpu_percent)
 
         _scan_ref.update(
-            status="loading_model",
-            message="Loading face detection (OpenVINO) and face recognition (InsightFace)…",
+            status="scanning",
+            message="Checking for new photos…",
             current=0, total=0, faces_found=0, errors=0,
             rate=0.0, eta_seconds=0, current_file="",
             started_at=datetime.now().isoformat(timespec="seconds"),
             elapsed_seconds=0, photo_seconds=0.0, sec_per_img=0.0,
         )
 
-        pipeline = OpenVINOHybridPipeline(device="GPU")
         conn = init_db(DB_PATH_OV)
         already = {r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()}
         known_hashes = dict(
@@ -455,12 +454,11 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
 
         new_count = len(files)
         grand_total = prev_photos + new_count
-        _scan_ref.update(status="scanning", total=grand_total, current=prev_photos,
-                     faces_found=prev_faces,
-                     message=f"Resuming: {new_count} new photos ({prev_photos} already done)...")
 
         if new_count == 0:
-            _scan_ref.update(status="clustering", message="No new photos. Re-clustering...")
+            _scan_ref.update(status="clustering", total=grand_total, current=prev_photos,
+                         faces_found=prev_faces,
+                         message="No new photos. Re-clustering...")
             _run_with_lower_priority(
                 cluster_faces, conn, threshold,
                 progress_cb=lambda d, t: _scan_ref.update(message=f"Clustering... {d}/{t} faces"),
@@ -469,6 +467,18 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
                          message="No new photos found. Clustering complete.")
             conn.close()
             return
+
+        # New photos exist — now load the model
+        _scan_ref.update(
+            status="loading_model",
+            message="Loading face detection (OpenVINO) and face recognition (InsightFace)…",
+            total=grand_total, current=prev_photos, faces_found=prev_faces,
+        )
+        pipeline = OpenVINOHybridPipeline(device="GPU")
+
+        _scan_ref.update(status="scanning", total=grand_total, current=prev_photos,
+                     faces_found=prev_faces,
+                     message=f"Resuming: {new_count} new photos ({prev_photos} already done)...")
 
         found = prev_faces
         errs = 0
