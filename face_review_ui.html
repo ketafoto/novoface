@@ -540,6 +540,28 @@
   }
   .face-card:hover { border-color: #a5f3c4; transform: translateY(-2px); }
   .face-card:active { transform: translateY(0); }
+  .face-card.selected { border-color: #a5f3c4; box-shadow: 0 0 0 2px rgba(165,243,196,0.25); }
+  .face-card .sel-check {
+    position: absolute; top: 6px; right: 6px;
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.45);
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; line-height: 1; cursor: pointer;
+    opacity: 0; transition: opacity 0.12s;
+    z-index: 2;
+  }
+  .face-card:hover .sel-check, .face-card.selected .sel-check { opacity: 1; }
+  .face-card.selected .sel-check { background: #a5f3c4; border-color: #a5f3c4; color: #0f1117; }
+  .face-select-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 4px 0 12px; font-size: 13px; color: #a5f3c4;
+  }
+  .face-select-bar button {
+    padding: 3px 10px; font-size: 12px; border-radius: 5px;
+    border: 1px solid #3a3d4a; background: #1a1d2a; color: #c0c0d0; cursor: pointer;
+  }
+  .face-select-bar button:hover { background: #252840; }
   .face-card img {
     width: 100%;
     aspect-ratio: 4/5;
@@ -1385,6 +1407,9 @@ let collapsedGroups = new Set();
 let _thumbsLoading = false;
 let _thumbsProgress = '';
 
+let selectedFaces = new Set();   // Set of face IDs currently selected in detail pane
+let _lastSelectedIdx = -1;       // index of last toggled card, for Shift+click range
+
 async function loadGroups() {
   const r = await fetch('/api/groups');
   groups = await r.json();
@@ -1524,7 +1549,11 @@ function startFaceDrag(ev, faceId) {
     ev.preventDefault();
     return;
   }
-  ev.dataTransfer.setData('text/plain', 'face:' + faceId);
+  if (selectedFaces.size > 1 && selectedFaces.has(faceId)) {
+    ev.dataTransfer.setData('text/plain', 'face-multi:' + [...selectedFaces].join(','));
+  } else {
+    ev.dataTransfer.setData('text/plain', 'face:' + faceId);
+  }
   ev.dataTransfer.effectAllowed = 'move';
 }
 
@@ -1540,19 +1569,31 @@ function clusterItemDragover(e) {
 async function dropFaceOnCluster(e, targetClusterId) {
   if (_thumbsLoading) return;
   const data = e.dataTransfer.getData('text/plain');
-  if (!data || !data.startsWith('face:')) return;
-  const faceId = parseInt(data.slice(5), 10);
-  if (isNaN(faceId)) return;
+  if (!data) return;
   if (!activeCluster || targetClusterId === activeCluster.id) return;
-  const r = await fetch(`/api/faces/${faceId}/move`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({cluster_id: targetClusterId}),
-  });
-  if (!r.ok) {
-    showToast('Move failed');
-    return;
+
+  let faceIds = [];
+  if (data.startsWith('face-multi:')) {
+    faceIds = data.slice(11).split(',').map(Number).filter(n => !isNaN(n));
+  } else if (data.startsWith('face:')) {
+    const id = parseInt(data.slice(5), 10);
+    if (!isNaN(id)) faceIds = [id];
+  } else {
+    return; // cluster drag, ignore
   }
+  if (faceIds.length === 0) return;
+
+  const results = await Promise.all(faceIds.map(faceId =>
+    fetch(`/api/faces/${faceId}/move`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cluster_id: targetClusterId}),
+    })
+  ));
+  if (results.some(r => !r.ok)) { showToast('Some moves failed'); return; }
+
+  selectedFaces.clear();
+  _lastSelectedIdx = -1;
   delete clusterFaces[activeCluster.id];
   delete clusterFaces[targetClusterId];
   delete firstThumb[activeCluster.id];
@@ -1560,7 +1601,7 @@ async function dropFaceOnCluster(e, targetClusterId) {
   await loadClusters();
   renderSidebar();
   await selectCluster(activeCluster.id);
-  showToast('Photo moved to cluster');
+  showToast(faceIds.length === 1 ? 'Photo moved to cluster' : `${faceIds.length} photos moved`);
 }
 
 function showClusterContextMenu(e, clusterId) {
@@ -1932,6 +1973,8 @@ async function confirmDeleteGroup() {
 }
 
 async function selectCluster(id) {
+  selectedFaces.clear();
+  _lastSelectedIdx = -1;
   activeCluster = clusters.find(c => c.id === id);
   renderSidebar();
   if (!clusterFaces[id]) {
@@ -2005,6 +2048,10 @@ function renderDetail() {
         <button class="btn btn-merge" onclick="showMergeModal()">Merge into...</button>
       </div>
     </div>
+    ${selectedFaces.size > 0 ? `<div class="face-select-bar">
+      <span>${selectedFaces.size} selected — drag to a cluster to move</span>
+      <button onclick="selectedFaces.clear();_lastSelectedIdx=-1;renderDetail()">Clear</button>
+    </div>` : ''}
     <div class="face-grid">`;
 
   for (const f of faces) {
@@ -2018,12 +2065,14 @@ function renderDetail() {
       ? '...' + f.file_path.slice(-47) : f.file_path;
     const faceId = f.face_id != null ? f.face_id : f.id;
 
+    const isSelected = selectedFaces.has(faceId);
     html += `
-      <div class="face-card" onclick="copyPath('${escJs(f.file_path)}')"
-           title="Click to copy path. Drag to a cluster in the sidebar to move this photo there. Right-click for menu."
+      <div class="face-card${isSelected ? ' selected' : ''}" onclick="copyPath('${escJs(f.file_path)}')"
+           title="Click to copy path. Check box to select for bulk move. Drag to a cluster to move. Right-click for menu."
            draggable="true"
            ondragstart="startFaceDrag(event,${faceId})"
            oncontextmenu="event.preventDefault();event.stopPropagation();showFaceContextMenu(event,${faceId})">
+        <div class="sel-check" onclick="event.stopPropagation();toggleFaceSelect(event,${faceId},${faces.indexOf(f)})">${isSelected ? '✓' : ''}</div>
         <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
           <span class="date">${year}</span>
@@ -2034,6 +2083,23 @@ function renderDetail() {
   }
   html += '</div>';
   document.getElementById('main').innerHTML = html;
+}
+
+function toggleFaceSelect(event, faceId, idx) {
+  const faces = clusterFaces[activeCluster?.id] || [];
+  if (event.shiftKey && _lastSelectedIdx >= 0) {
+    const lo = Math.min(idx, _lastSelectedIdx);
+    const hi = Math.max(idx, _lastSelectedIdx);
+    for (let i = lo; i <= hi; i++) {
+      const f = faces[i];
+      if (f) selectedFaces.add(f.face_id != null ? f.face_id : f.id);
+    }
+  } else {
+    if (selectedFaces.has(faceId)) selectedFaces.delete(faceId);
+    else selectedFaces.add(faceId);
+    _lastSelectedIdx = idx;
+  }
+  renderDetail();
 }
 
 async function assignGroup() {
