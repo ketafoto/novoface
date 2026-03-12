@@ -597,7 +597,15 @@
     max-height: 80vh;
     overflow-y: auto;
   }
-  .modal h3 { margin-bottom: 16px; font-size: 16px; }
+  .modal h3 { margin-bottom: 12px; font-size: 16px; }
+  .modal .merge-search {
+    width: 100%; box-sizing: border-box;
+    padding: 7px 12px; margin-bottom: 12px;
+    background: #0f1117; border: 1px solid #2a2d3a; border-radius: 6px;
+    color: #e8eaed; font-size: 14px; outline: none;
+  }
+  .modal .merge-search:focus { border-color: #5c6bc0; }
+  .modal .merge-no-results { color: #6b6b8a; padding: 8px 12px; font-size: 14px; }
   .modal .merge-target {
     display: flex;
     align-items: center;
@@ -2089,26 +2097,52 @@ function showMergeModal() {
   const named = others.filter(c => c.name).sort((a, b) => a.name.localeCompare(b.name));
   const unnamed = others.filter(c => !c.name).sort((a, b) => b.face_count - a.face_count);
   const sorted = [...named, ...unnamed];
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 
-  let items = '';
-  for (const c of sorted) {
-    const name = c.name || 'Unnamed';
-    const thumb = firstThumb[c.id] || '';
-    items += `
-      <div class="merge-target" onclick="doMerge(${activeCluster.id}, ${c.id})">
-        ${thumb ? `<img src="${thumb}" alt="">` : '<div style="width:32px;height:32px;border-radius:50%;background:#2a2d3a"></div>'}
-        <span>${esc(name)} (${c.face_count} photos)</span>
-      </div>`;
-  }
   overlay.innerHTML = `
     <div class="modal">
       <h3>Merge "${esc(activeCluster.name || 'Unnamed')}" into:</h3>
-      ${items || '<p style="color:#6b6b8a">No other clusters</p>'}
+      <input class="merge-search" type="text" placeholder="Search…" autocomplete="off">
+      <div class="merge-list"></div>
     </div>`;
   document.body.appendChild(overlay);
+
+  const listEl = overlay.querySelector('.merge-list');
+  const searchEl = overlay.querySelector('.merge-search');
+
+  function renderList(query) {
+    let rx = null;
+    if (query) {
+      try { rx = new RegExp(query, 'i'); } catch { rx = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+    }
+    const visible = rx ? sorted.filter(c => rx.test(c.name || '') || rx.test(String(c.id))) : sorted;
+    if (!visible.length) {
+      listEl.innerHTML = '<div class="merge-no-results">No matches</div>';
+      return;
+    }
+    listEl.innerHTML = visible.map(c => {
+      const name = c.name || 'Unnamed';
+      const thumb = firstThumb[c.id] || '';
+      return `<div class="merge-target" onclick="doMerge(${activeCluster.id}, ${c.id})">
+        ${thumb ? `<img src="${thumb}" alt="">` : '<div style="width:32px;height:32px;border-radius:50%;background:#2a2d3a"></div>'}
+        <span>${esc(name)} (${c.face_count} photos)</span>
+      </div>`;
+    }).join('');
+  }
+
+  renderList('');
+  searchEl.focus();
+  searchEl.addEventListener('input', () => renderList(searchEl.value.trim()));
+  searchEl.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { overlay.remove(); e.stopPropagation(); }
+    if (e.key === 'Enter') {
+      const first = listEl.querySelector('.merge-target');
+      if (first) first.click();
+    }
+  });
 }
 
 async function doMerge(sourceId, targetId) {
