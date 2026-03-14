@@ -13,6 +13,7 @@ import argparse
 import atexit
 import base64
 import ctypes
+import fnmatch
 import json
 import os
 import sys
@@ -48,6 +49,36 @@ except ImportError:
 app = Flask(__name__)
 
 BACKEND_CONFIG = DATA_DIR / "backend.json"
+SETTINGS_PATH = DATA_DIR / "settings.json"
+
+
+def load_settings() -> dict:
+    if SETTINGS_PATH.exists():
+        try:
+            return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_settings(s: dict):
+    DATA_DIR.mkdir(exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(s, indent=2), encoding="utf-8")
+
+
+def _parse_exclude_patterns(raw: str) -> list[str]:
+    """Split comma-separated exclude pattern string into a cleaned list."""
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _path_matches_exclude(file_path: str, patterns: list[str]) -> bool:
+    """Return True if any component of file_path matches any fnmatch pattern (case-insensitive)."""
+    parts = Path(file_path).parts
+    return any(
+        fnmatch.fnmatch(part.lower(), pat.lower())
+        for pat in patterns
+        for part in parts
+    )
 
 
 def _cleanup_children():
@@ -266,7 +297,7 @@ def _apply_cpu_limit(cpu_percent):
             pass
 
 
-def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
+def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patterns=None):
     from insightface.app import FaceAnalysis
     from face_scan import _face_providers
 
@@ -287,6 +318,16 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
         fa.prepare(ctx_id=-1, det_size=(det_size, det_size))
 
         conn = init_db(DB_PATH)
+
+        if exclude_patterns:
+            all_paths = [r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()]
+            to_del = [p for p in all_paths if _path_matches_exclude(p, exclude_patterns)]
+            if to_del:
+                ph = ",".join("?" * len(to_del))
+                conn.execute(f"DELETE FROM faces WHERE photo_id IN (SELECT id FROM photos WHERE file_path IN ({ph}))", to_del)
+                conn.execute(f"DELETE FROM photos WHERE file_path IN ({ph})", to_del)
+                conn.commit()
+
         already = {r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()}
         known_hashes = dict(
             conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
@@ -299,7 +340,10 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
             fp = Path(folder)
             if not fp.is_dir():
                 continue
-            for root, _, names in os.walk(fp):
+            for root, dirs, names in os.walk(fp):
+                if exclude_patterns:
+                    dirs[:] = [d for d in dirs if not any(
+                        fnmatch.fnmatch(d.lower(), pat.lower()) for pat in exclude_patterns)]
                 for name in names:
                     if Path(name).suffix.lower() in PHOTO_EXTENSIONS:
                         full = Path(root) / name
@@ -417,7 +461,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref):
         _scan_ref.update(status="error", message=str(e))
 
 
-def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
+def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patterns=None):
     from openvino_pipeline import OpenVINOHybridPipeline, process_photo as ov_process_photo
 
     try:
@@ -433,6 +477,16 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
         )
 
         conn = init_db(DB_PATH_OV)
+
+        if exclude_patterns:
+            all_paths = [r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()]
+            to_del = [p for p in all_paths if _path_matches_exclude(p, exclude_patterns)]
+            if to_del:
+                ph = ",".join("?" * len(to_del))
+                conn.execute(f"DELETE FROM faces WHERE photo_id IN (SELECT id FROM photos WHERE file_path IN ({ph}))", to_del)
+                conn.execute(f"DELETE FROM photos WHERE file_path IN ({ph})", to_del)
+                conn.commit()
+
         already = {r[0] for r in conn.execute("SELECT file_path FROM photos").fetchall()}
         known_hashes = dict(
             conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
@@ -445,7 +499,10 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref):
             fp = Path(folder)
             if not fp.is_dir():
                 continue
-            for root, _, names in os.walk(fp):
+            for root, dirs, names in os.walk(fp):
+                if exclude_patterns:
+                    dirs[:] = [d for d in dirs if not any(
+                        fnmatch.fnmatch(d.lower(), pat.lower()) for pat in exclude_patterns)]
                 for name in names:
                     if Path(name).suffix.lower() in PHOTO_EXTENSIONS:
                         full = Path(root) / name
@@ -711,6 +768,21 @@ def api_set_backend():
     return jsonify({"ok": True, "backend": backend})
 
 
+@app.route("/api/scan/settings", methods=["GET"])
+def get_scan_settings():
+    return jsonify(load_settings())
+
+
+@app.route("/api/scan/settings", methods=["POST"])
+def post_scan_settings():
+    data = request.json or {}
+    s = load_settings()
+    if "exclude_patterns" in data:
+        s["exclude_patterns"] = str(data["exclude_patterns"])
+    save_settings(s)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/scan/folders", methods=["GET"])
 def get_folders():
     conn = get_scan_folders_conn()
@@ -767,6 +839,9 @@ def start_scan():
     threshold = float(data.get("threshold", 0.35))
     cpu_percent = int(data.get("cpu_percent", 60))
 
+    settings = load_settings()
+    exclude_patterns = _parse_exclude_patterns(settings.get("exclude_patterns", ""))
+
     conn = get_scan_folders_conn()
     rows = conn.execute("SELECT folder_path FROM scan_folders").fetchall()
     conn.close()
@@ -792,13 +867,13 @@ def start_scan():
     if backend == "cpu":
         _scan_thread = threading.Thread(
             target=_run_scan,
-            args=(folders, det_size, threshold, cpu_percent, _scan_ref),
+            args=(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patterns),
             daemon=True,
         )
     else:
         _scan_thread = threading.Thread(
             target=_run_scan_openvino,
-            args=(folders, threshold, cpu_percent, _scan_ref),
+            args=(folders, threshold, cpu_percent, _scan_ref, exclude_patterns),
             daemon=True,
         )
     _scan_thread.start()
@@ -924,6 +999,7 @@ def scan_pending():
     all_photos = [r[0] for r in data_conn.execute("SELECT file_path FROM photos").fetchall()]
     data_conn.close()
 
+    exclude_patterns = _parse_exclude_patterns(load_settings().get("exclude_patterns", ""))
     folder_prefixes = [row["folder_path"] for row in rows]
     already = set(all_photos)
 
@@ -937,7 +1013,10 @@ def scan_pending():
         fp = Path(row["folder_path"])
         if not fp.is_dir():
             continue
-        for root, _, names in os.walk(fp):
+        for root, dirs, names in os.walk(fp):
+            if exclude_patterns:
+                dirs[:] = [d for d in dirs if not any(
+                    fnmatch.fnmatch(d.lower(), pat.lower()) for pat in exclude_patterns)]
             for name in names:
                 if Path(name).suffix.lower() in PHOTO_EXTENSIONS:
                     if str(Path(root) / name) not in already:

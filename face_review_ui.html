@@ -183,6 +183,21 @@
   .add-folder-row input:focus { border-color: #a5f3c4; }
   .add-folder-row input::placeholder { color: #4a4a6a; }
   .add-folder-hint { font-size: 11px; color: #4a4a6a; margin-top: 8px; }
+  .exclude-row { margin-top: 16px; }
+  .exclude-row label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #6b6b8a; margin-bottom: 6px;
+  }
+  .exclude-row input {
+    width: 100%; box-sizing: border-box;
+    padding: 8px 12px;
+    background: #0f1117; border: 1px solid #2a2d3a; border-radius: 6px;
+    color: #c0c0d0; font-size: 13px; font-family: monospace; outline: none;
+    transition: border-color 0.15s;
+  }
+  .exclude-row input:focus { border-color: #a5f3c4; }
+  .exclude-row input::placeholder { color: #3a3d5a; }
 
   .settings-row { display: flex; gap: 24px; margin-bottom: 20px; flex-wrap: wrap; }
   .setting { display: flex; flex-direction: column; gap: 6px; }
@@ -231,6 +246,8 @@
     left: 50%;
     transform: translateX(-50%);
     width: 290px;
+    max-height: 40vh;
+    overflow-y: auto;
     background: #1e2030;
     border: 1px solid #3a3d5a;
     border-radius: 8px;
@@ -242,7 +259,6 @@
     z-index: 50;
     text-transform: none;
     letter-spacing: 0;
-    pointer-events: none;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   }
   .tip-icon .tip::after {
@@ -254,7 +270,7 @@
     border: 6px solid transparent;
     border-top-color: #3a3d5a;
   }
-  .tip-icon:hover .tip { display: block; }
+  .tip-icon.tip-open .tip { display: block; }
   .tip .pro { color: #a5f3c4; }
   .tip .con { color: #ff8888; }
 
@@ -728,6 +744,24 @@
         <button class="btn" onclick="openFolderPicker()">Browse...</button>
       </div>
       <div class="add-folder-hint">All subfolders will be scanned recursively for photos.</div>
+      <div class="exclude-row">
+        <label>
+          Exclude folders
+          <span class="tip-icon">?<span class="tip">
+            Comma-separated list of folder-name patterns to skip during scan.<br><br>
+            Each pattern is matched against <b>folder names</b> (not full paths) using glob rules (case-insensitive):<br>
+            &nbsp;<b>*</b> matches any characters &nbsp;&nbsp;<b>?</b> matches one character<br><br>
+            <b>Examples:</b><br>
+            <code>@eaDir</code> — Synology thumbnail cache<br>
+            <code>*thumb*, face_data</code> — any folder containing "thumb", or named "face_data"<br>
+            <code>.*, #recycle</code> — hidden folders and Synology recycle bin<br><br>
+            On <b>Scan for New</b>, photos already in the database whose path contains a matching folder component are also <b>removed</b> from the database.
+          </span></span>
+        </label>
+        <input type="text" id="exclude-input"
+               placeholder="e.g. @eaDir, *thumb*, face_data, #recycle"
+               oninput="scheduleExcludeSave()">
+      </div>
     </div>
 
     <div class="card">
@@ -868,6 +902,19 @@ function switchTab(tab) {
   }
 }
 
+// ─── Tooltip click-to-toggle ────────────────────────────────────────────────
+document.addEventListener('click', function(e) {
+  const icon = e.target.closest('.tip-icon');
+  if (icon) {
+    const wasOpen = icon.classList.contains('tip-open');
+    document.querySelectorAll('.tip-icon.tip-open').forEach(el => el.classList.remove('tip-open'));
+    if (!wasOpen) icon.classList.add('tip-open');
+    e.stopPropagation();
+  } else {
+    document.querySelectorAll('.tip-icon.tip-open').forEach(el => el.classList.remove('tip-open'));
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Shared helpers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -916,10 +963,31 @@ function formatEta(seconds) { return formatDuration(seconds); }
 let folders = [];
 
 async function loadFolders() {
-  const r = await fetch('/api/scan/folders');
-  folders = await r.json();
+  const [foldersRes, settingsRes] = await Promise.all([
+    fetch('/api/scan/folders'),
+    fetch('/api/scan/settings'),
+  ]);
+  folders = await foldersRes.json();
+  const settings = await settingsRes.json();
+  const el = document.getElementById('exclude-input');
+  if (el) el.value = settings.exclude_patterns || '';
   renderFolders();
   updateScanBtnState();
+}
+
+let _excludeSaveTimer = null;
+function scheduleExcludeSave() {
+  clearTimeout(_excludeSaveTimer);
+  _excludeSaveTimer = setTimeout(saveExcludePatterns, 800);
+}
+
+async function saveExcludePatterns() {
+  const val = document.getElementById('exclude-input')?.value ?? '';
+  await fetch('/api/scan/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({exclude_patterns: val}),
+  });
 }
 
 function renderFolders() {
