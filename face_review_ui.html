@@ -466,6 +466,8 @@
   }
   .cluster-item:hover { background: #1c1f2e; }
   .cluster-item.active { background: #1e2a1e; border-left: 3px solid #a5f3c4; }
+  .cluster-item.selected { background: #1a2236; border-left: 3px solid #6888cc; }
+  .cluster-item.selected.active { background: #1e2a2a; border-left: 3px solid #a5f3c4; }
   .cluster-item .thumb-stack {
     width: 40px; height: 40px;
     border-radius: 50%;
@@ -1475,6 +1477,7 @@ let collapsedGroups = new Set();
 let _thumbsLoading = false;
 let _thumbsProgress = '';
 
+let selectedClusters = new Set(); // Set of cluster IDs selected in sidebar (Ctrl+click)
 let selectedFaces = new Set();   // Set of face IDs currently selected in detail pane
 let _lastSelectedIdx = -1;       // index of last toggled card, for Shift+click range
 
@@ -1590,12 +1593,14 @@ function sortClusters(list) {
 
 function clusterItemHtml(c) {
   const isActive = activeCluster && activeCluster.id === c.id;
+  const isSelected = selectedClusters.has(c.id);
   const name = c.name || 'Unnamed';
   const nameClass = c.name ? 'name' : 'name unnamed';
   const thumb = firstThumb[c.id] || '';
+  const cls = 'cluster-item' + (isActive ? ' active' : '') + (isSelected ? ' selected' : '');
   return `
-    <div class="cluster-item ${isActive ? 'active' : ''}"
-         onclick="selectCluster(${c.id})"
+    <div class="${cls}"
+         onclick="clusterItemClick(event,${c.id})"
          oncontextmenu="event.preventDefault();showClusterContextMenu(event,${c.id})"
          draggable="true"
          ondragstart="event.dataTransfer.setData('text/plain','${c.id}')"
@@ -1610,6 +1615,19 @@ function clusterItemHtml(c) {
         <div class="count">${c.face_count} photo${c.face_count !== 1 ? 's' : ''}${c.birth_year ? ' \u00b7 b.' + c.birth_year : ''}</div>
       </div>
     </div>`;
+}
+
+function clusterItemClick(e, id) {
+  if (e.ctrlKey || e.metaKey) {
+    // On first Ctrl+click, seed the selection with the currently active cluster
+    if (selectedClusters.size === 0 && activeCluster) selectedClusters.add(activeCluster.id);
+    if (selectedClusters.has(id)) selectedClusters.delete(id);
+    else selectedClusters.add(id);
+    renderSidebar();
+  } else {
+    selectedClusters.clear();
+    selectCluster(id);
+  }
 }
 
 function startFaceDrag(ev, faceId) {
@@ -1674,20 +1692,32 @@ async function dropFaceOnCluster(e, targetClusterId) {
 
 function showClusterContextMenu(e, clusterId) {
   closeContextMenu();
+  // If right-clicking a cluster that's part of a multi-selection, act on all selected
+  const ids = (selectedClusters.size > 1 && selectedClusters.has(clusterId))
+    ? [...selectedClusters]
+    : [clusterId];
+  const isMulti = ids.length > 1;
+  const idsJson = JSON.stringify(ids);
+
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   menu.id = 'ctx-menu';
 
-  let html = `<div class="ctx-item" onclick="renameClusterFromMenu(${clusterId})">Rename...</div>`;
-  html += `<div class="ctx-item" onclick="clearClusterName(${clusterId})">Clear name</div>`;
+  let html = '';
+  if (isMulti) {
+    html += `<div class="ctx-title">${ids.length} clusters selected</div>`;
+  } else {
+    html += `<div class="ctx-item" onclick="renameClusterFromMenu(${clusterId})">Rename...</div>`;
+    html += `<div class="ctx-item" onclick="clearClusterName(${clusterId})">Clear name</div>`;
+  }
   html += '<div class="ctx-divider"></div>';
   html += '<div class="ctx-title">Move to group</div>';
   for (const g of groups) {
-    html += `<div class="ctx-item" onclick="moveToGroup(${clusterId},${g.id})">${esc(g.name)}</div>`;
+    html += `<div class="ctx-item" onclick="moveToGroup(${idsJson},${g.id})">${esc(g.name)}</div>`;
   }
-  html += `<div class="ctx-item ctx-none" onclick="moveToGroup(${clusterId},null)">— Remove from group —</div>`;
+  html += `<div class="ctx-item ctx-none" onclick="moveToGroup(${idsJson},null)">— Remove from group —</div>`;
   html += `<div class="ctx-divider"></div>`;
-  html += `<div class="ctx-item ctx-new" onclick="moveToNewGroup(${clusterId})">+ New group...</div>`;
+  html += `<div class="ctx-item ctx-new" onclick="moveToNewGroup(${idsJson})">+ New group...</div>`;
 
   menu.innerHTML = html;
   document.body.appendChild(menu);
@@ -1806,18 +1836,24 @@ function closeContextMenu() {
   if (m) m.remove();
 }
 
-async function moveToGroup(clusterId, groupId) {
+async function moveToGroup(clusterIds, groupId) {
   closeContextMenu();
-  await fetch(`/api/clusters/${clusterId}/group`, {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({group_id: groupId}),
-  });
-  const c = clusters.find(c => c.id === clusterId);
-  if (c) c.group_id = groupId;
-  if (activeCluster && activeCluster.id === clusterId) activeCluster.group_id = groupId;
+  if (!Array.isArray(clusterIds)) clusterIds = [clusterIds];
+  await Promise.all(clusterIds.map(id =>
+    fetch(`/api/clusters/${id}/group`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({group_id: groupId}),
+    })
+  ));
+  for (const id of clusterIds) {
+    const c = clusters.find(c => c.id === id);
+    if (c) c.group_id = groupId;
+    if (activeCluster && activeCluster.id === id) activeCluster.group_id = groupId;
+  }
+  selectedClusters.clear();
   renderSidebar();
-  if (activeCluster && activeCluster.id === clusterId) renderDetail();
+  if (activeCluster && clusterIds.includes(activeCluster.id)) renderDetail();
 }
 
 async function dropOnGroup(e, groupId) {
@@ -1826,11 +1862,12 @@ async function dropOnGroup(e, groupId) {
   await moveToGroup(clusterId, groupId);
 }
 
-function moveToNewGroup(clusterId) {
+function moveToNewGroup(clusterIds) {
   closeContextMenu();
+  if (!Array.isArray(clusterIds)) clusterIds = [clusterIds];
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  overlay.dataset.clusterId = String(clusterId);
+  overlay.dataset.clusterIds = JSON.stringify(clusterIds);
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
     <div class="modal" onclick="event.stopPropagation()">
@@ -1852,9 +1889,9 @@ function moveToNewGroup(clusterId) {
 }
 
 async function confirmNewGroup() {
-  const overlay = document.querySelector('.modal-overlay[data-cluster-id]');
+  const overlay = document.querySelector('.modal-overlay[data-cluster-ids]');
   if (!overlay) return;
-  const clusterId = parseInt(overlay.dataset.clusterId, 10);
+  const clusterIds = JSON.parse(overlay.dataset.clusterIds);
   const input = document.getElementById('new-group-name-input');
   const name = input ? input.value.trim() : '';
   overlay.remove();
@@ -1866,7 +1903,7 @@ async function confirmNewGroup() {
   });
   const g = await r.json();
   await loadGroups();
-  await moveToGroup(clusterId, g.id);
+  await moveToGroup(clusterIds, g.id);
 }
 
 function renderSidebar() {
