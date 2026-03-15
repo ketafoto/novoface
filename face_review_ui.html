@@ -450,6 +450,21 @@
   .ctx-none { color: #6b6b8a; font-style: italic; }
   .ctx-new { color: #a5f3c4; }
   .ctx-divider { border-top: 1px solid #2a2d3a; margin: 4px 0; }
+  .ctx-search-wrap { padding: 4px 8px 4px; }
+  .ctx-search {
+    width: 100%; padding: 5px 9px; font-size: 12px; font-family: inherit;
+    background: #13151f; border: 1px solid #3a3d5a; border-radius: 5px;
+    color: #e0e0e0; outline: none;
+  }
+  .ctx-search:focus { border-color: #6b7fc4; }
+  .ctx-cluster-list { max-height: 220px; overflow-y: auto; }
+  .ctx-cluster-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; font-size: 13px; cursor: pointer; color: #e0e0e0;
+  }
+  .ctx-cluster-row:hover { background: #2a2d3e; }
+  .ctx-thumb { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+  .ctx-thumb-ph { width: 26px; height: 26px; border-radius: 50%; background: #2a2d3a; flex-shrink: 0; }
   .group-divider {
     padding: 8px 16px; font-size: 11px; text-transform: uppercase;
     letter-spacing: 1px; color: #6b6b8a; border-top: 1px solid #2a2d3a;
@@ -1793,42 +1808,114 @@ async function confirmRenameCluster() {
 
 function showFaceContextMenu(e, faceId) {
   closeContextMenu();
+  const faceIds = (selectedFaces.size > 1 && selectedFaces.has(faceId))
+    ? [...selectedFaces] : [faceId];
+  const multi = faceIds.length > 1;
+
+  const sorted = [...clusters]
+    .filter(c => !activeCluster || c.id !== activeCluster.id)
+    .sort((a, b) => {
+      if (!!a.name !== !!b.name) return a.name ? -1 : 1;
+      return (a.name || '').localeCompare(b.name || '') || b.face_count - a.face_count;
+    });
+
   const menu = document.createElement('div');
   menu.className = 'ctx-menu';
   menu.id = 'ctx-menu';
-  menu.innerHTML = `<div class="ctx-item" onclick="addFaceToNewCluster(${faceId})">Add to new cluster</div>`;
+  menu.style.minWidth = '250px';
+  menu.innerHTML = `
+    <div class="ctx-item ctx-new" onclick="addFaceToNewCluster(${JSON.stringify(faceIds)})">
+      ${multi ? `Add ${faceIds.length} photos to new cluster` : 'Add to new cluster'}
+    </div>
+    <div class="ctx-divider"></div>
+    <div class="ctx-title">Move to cluster</div>
+    <div class="ctx-search-wrap">
+      <input class="ctx-search" type="text" placeholder="Search…" autocomplete="off">
+    </div>
+    <div class="ctx-cluster-list"></div>`;
+
+  menu.style.visibility = 'hidden';
   document.body.appendChild(menu);
-  const x = Math.min(e.clientX, window.innerWidth - 200);
-  const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 10);
-  menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
+
+  const listEl = menu.querySelector('.ctx-cluster-list');
+  const searchEl = menu.querySelector('.ctx-search');
+
+  function renderCtxList(query) {
+    let rx = null;
+    if (query) {
+      try { rx = new RegExp(query, 'i'); }
+      catch { rx = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+    }
+    const visible = rx ? sorted.filter(c => rx.test(c.name || '') || rx.test(String(c.id))) : sorted;
+    if (!visible.length) {
+      listEl.innerHTML = '<div class="ctx-cluster-row ctx-none">No matches</div>';
+      return;
+    }
+    listEl.innerHTML = visible.map(c => {
+      const thumb = firstThumb[c.id] || '';
+      return `<div class="ctx-cluster-row" onclick="moveFacesToCluster(${JSON.stringify(faceIds)}, ${c.id})">
+        ${thumb ? `<img src="${thumb}" class="ctx-thumb" alt="">` : '<div class="ctx-thumb-ph"></div>'}
+        <span>${esc(c.name || 'Unnamed')}</span>
+      </div>`;
+    }).join('');
+  }
+
+  renderCtxList('');
+
+  const rect = menu.getBoundingClientRect();
+  const x = Math.min(e.clientX, window.innerWidth - rect.width - 4);
+  const y = Math.min(e.clientY, window.innerHeight - rect.height - 4);
+  menu.style.left = Math.max(4, x) + 'px';
+  menu.style.top = Math.max(4, y) + 'px';
+  menu.style.visibility = '';
+
+  searchEl.focus();
+  searchEl.addEventListener('input', () => renderCtxList(searchEl.value.trim()));
+  searchEl.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { closeContextMenu(); ev.stopPropagation(); }
+    if (ev.key === 'Enter') {
+      const first = listEl.querySelector('.ctx-cluster-row:not(.ctx-none)');
+      if (first) first.click();
+    }
+    ev.stopPropagation();
+  });
   setTimeout(() => document.addEventListener('click', closeContextMenu, {once: true}), 0);
 }
 
-async function addFaceToNewCluster(faceId) {
+async function addFaceToNewCluster(faceIds) {
   closeContextMenu();
   if (_thumbsLoading) return;
+  if (!Array.isArray(faceIds)) faceIds = [faceIds];
   const cr = await fetch('/api/clusters', { method: 'POST', headers: {'Content-Type': 'application/json'} });
   const data = await cr.json();
   const newClusterId = data.id;
-  if (!newClusterId) {
-    showToast('Failed to create cluster');
-    return;
+  if (!newClusterId) { showToast('Failed to create cluster'); return; }
+  await moveFacesToCluster(faceIds, newClusterId, true);
+}
+
+async function moveFacesToCluster(faceIds, targetClusterId, isNew = false) {
+  closeContextMenu();
+  if (_thumbsLoading) return;
+  if (!Array.isArray(faceIds)) faceIds = [faceIds];
+  const results = await Promise.all(faceIds.map(id =>
+    fetch(`/api/faces/${id}/move`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cluster_id: targetClusterId}),
+    })
+  ));
+  if (results.some(r => !r.ok)) { showToast('Some moves failed'); return; }
+  selectedFaces.clear();
+  _lastSelectedIdx = -1;
+  if (activeCluster) {
+    delete clusterFaces[activeCluster.id];
+    delete firstThumb[activeCluster.id];
   }
-  const r = await fetch(`/api/faces/${faceId}/move`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({cluster_id: newClusterId}),
-  });
-  if (!r.ok) {
-    showToast('Move failed');
-    return;
-  }
-  delete clusterFaces[activeCluster.id];
-  delete firstThumb[activeCluster.id];
+  delete clusterFaces[targetClusterId];
+  delete firstThumb[targetClusterId];
   await loadClusters();
-  await selectCluster(newClusterId);
-  showToast('Photo moved to new cluster');
+  await selectCluster(isNew ? targetClusterId : activeCluster?.id);
+  showToast(faceIds.length === 1 ? 'Photo moved' : `${faceIds.length} photos moved`);
 }
 
 function closeContextMenu() {
