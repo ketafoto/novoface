@@ -2654,6 +2654,7 @@ function showMergeModal() {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  overlay.id = 'modal-merge';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 
   overlay.innerHTML = `
@@ -2712,7 +2713,7 @@ async function doMerge(sourceId, targetId) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({source_id: sourceId, target_id: targetId}),
   });
-  document.querySelector('.modal-overlay')?.remove();
+  document.getElementById('modal-merge')?.remove();
   delete clusterFaces[sourceId];
   delete clusterFaces[targetId];
   activeCluster = null;
