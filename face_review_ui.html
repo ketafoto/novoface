@@ -2208,7 +2208,6 @@ async function moveFacesToCluster(faceIds, targetClusterId, isNew = false) {
     delete firstThumb[activeCluster.id];
   }
   delete clusterFaces[targetClusterId];
-  delete firstThumb[targetClusterId];
   await loadClusters();
   await selectCluster(isNew ? targetClusterId : activeCluster?.id);
   showToast(faceIds.length === 1 ? 'Photo moved' : `${faceIds.length} photos moved`);
