@@ -635,8 +635,15 @@
     color: #5a5a7a;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
     margin-top: 2px;
+  }
+  .face-card .path span { display: inline-block; }
+  @keyframes path-scroll {
+    0%,  15% { transform: translateX(0); }
+    85%, 100% { transform: translateX(var(--path-scroll-dist, 0px)); }
+  }
+  .face-card .path span.path-scrolling {
+    animation: path-scroll var(--path-scroll-dur, 4s) ease-in-out infinite;
   }
 
   /* ── Toast ── */
@@ -2559,7 +2566,7 @@ function renderDetail() {
         <div class="meta">
           <span class="date">${year}</span>
           ${ageStr ? `<span class="age">${ageStr}</span>` : ''}
-          <div class="path">${esc(shortPath)}</div>
+          <div class="path"><span>${esc(f.file_path)}</span></div>
         </div>
       </div>`;
   }
@@ -2635,7 +2642,7 @@ async function saveCluster() {
 
 function copyPath(filePath) {
   navigator.clipboard.writeText(filePath).then(() => {
-    showToast('Path copied: ' + filePath.split('\\').pop());
+    showToast('Path copied to clipboard: ' + filePath);
   });
 }
 
@@ -2720,10 +2727,32 @@ async function doMerge(sourceId, targetId) {
 // Init
 // ═══════════════════════════════════════════════════════════════════════════
 
+function initPathScroll() {
+  const main = document.getElementById('main');
+  main.addEventListener('mouseenter', e => {
+    if (!e.target.classList.contains('face-card')) return;
+    const span = e.target.querySelector('.path span');
+    if (!span) return;
+    const overflow = span.scrollWidth - span.parentElement.clientWidth;
+    if (overflow <= 0) return;
+    const secs = Math.min(8, Math.max(3, overflow / 40)).toFixed(1);
+    span.style.setProperty('--path-scroll-dist', `-${overflow}px`);
+    span.style.setProperty('--path-scroll-dur', `${secs}s`);
+    span.classList.add('path-scrolling');
+  }, true);
+  main.addEventListener('mouseleave', e => {
+    if (!e.target.classList.contains('face-card')) return;
+    const span = e.target.querySelector('.path span');
+    if (!span) return;
+    span.classList.remove('path-scrolling');
+  }, true);
+}
+
 async function init() {
   await loadBackend();
   await loadStats();
   await Promise.all([loadFolders(), loadDbLocation()]);
+  initPathScroll();
 
   const scanR = await fetch('/api/scan/status');
   const scanData = await scanR.json();
