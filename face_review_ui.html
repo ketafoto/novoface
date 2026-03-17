@@ -1927,6 +1927,7 @@ function clusterItemClick(e, id) {
     if (selectedClusters.has(id)) selectedClusters.delete(id);
     else selectedClusters.add(id);
     renderSidebar();
+    peekCluster(id);
   } else {
     selectedClusters.clear();
     _lastClusterClickIdx = idx;
@@ -2502,9 +2503,34 @@ async function selectCluster(id) {
   renderDetail();
 }
 
-function renderDetail() {
-  if (!activeCluster) return;
-  const c = activeCluster;
+async function peekCluster(id) {
+  // Show a cluster's faces without changing activeCluster or selectedClusters.
+  const peeked = clusters.find(c => c.id === id);
+  if (!peeked) return;
+  if (!clusterFaces[id]) {
+    const r = await fetch(`/api/clusters/${id}/faces`);
+    clusterFaces[id] = await r.json();
+  }
+  const faces = clusterFaces[id] || [];
+  const paths = faces.map(f => f.thumb_path).filter(Boolean);
+  detailThumbCache = {};
+  for (let i = 0; i < paths.length; i += 10) {
+    const chunk = paths.slice(i, i + 10);
+    const tr = await fetch('/api/thumbs', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({paths: chunk}),
+    });
+    const base64ByPath = await tr.json();
+    for (const [p, b64] of Object.entries(base64ByPath)) {
+      if (b64) detailThumbCache[p] = `data:image/jpeg;base64,${b64}`;
+    }
+  }
+  renderDetail(peeked);
+}
+
+function renderDetail(cluster) {
+  const c = cluster || activeCluster;
+  if (!c) return;
   const faces = clusterFaces[c.id] || [];
 
   let html = `
