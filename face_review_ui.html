@@ -476,6 +476,7 @@
     gap: 10px;
     padding: 10px 16px;
     cursor: pointer;
+    user-select: none;
     border-bottom: 1px solid #1a1d2a;
     transition: background 0.15s;
   }
@@ -1762,9 +1763,11 @@ let collapsedGroups = new Set();
 let _thumbsLoading = false;
 let _thumbsProgress = '';
 
-let selectedClusters = new Set(); // Set of cluster IDs selected in sidebar (Ctrl+click)
+let selectedClusters = new Set(); // Set of cluster IDs selected in sidebar (Ctrl+click or Shift+click)
 let selectedFaces = new Set();   // Set of face IDs currently selected in detail pane
 let _lastSelectedIdx = -1;       // index of last toggled card, for Shift+click range
+let _sidebarClusterOrder = [];   // flat ordered list of cluster IDs as rendered in sidebar
+let _lastClusterClickIdx = -1;   // anchor index for Shift+click range selection
 
 async function loadGroups() {
   const r = await fetch('/api/groups');
@@ -1903,7 +1906,15 @@ function clusterItemHtml(c) {
 }
 
 function clusterItemClick(e, id) {
-  if (e.ctrlKey || e.metaKey) {
+  const idx = _sidebarClusterOrder.indexOf(id);
+  if (e.shiftKey && _lastClusterClickIdx >= 0 && idx >= 0) {
+    e.preventDefault(); // prevent text selection
+    const lo = Math.min(_lastClusterClickIdx, idx);
+    const hi = Math.max(_lastClusterClickIdx, idx);
+    selectedClusters.clear();
+    for (let i = lo; i <= hi; i++) selectedClusters.add(_sidebarClusterOrder[i]);
+    renderSidebar();
+  } else if (e.ctrlKey || e.metaKey) {
     // On first Ctrl+click, seed the selection with the currently active cluster
     if (selectedClusters.size === 0 && activeCluster) selectedClusters.add(activeCluster.id);
     if (selectedClusters.has(id)) selectedClusters.delete(id);
@@ -1911,6 +1922,7 @@ function clusterItemClick(e, id) {
     renderSidebar();
   } else {
     selectedClusters.clear();
+    _lastClusterClickIdx = idx;
     selectCluster(id);
   }
 }
@@ -2281,6 +2293,7 @@ function renderSidebar() {
     html += `<div class="sidebar-loading">${esc(_thumbsProgress)}</div>`;
   }
 
+  _sidebarClusterOrder = [];
   const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
   for (const g of sortedGroups) {
     const members = sortClusters(clusters.filter(c => c.group_id === g.id));
@@ -2301,7 +2314,7 @@ function renderSidebar() {
         </span>
       </div>`;
     if (!collapsed) {
-      for (const c of members) html += clusterItemHtml(c);
+      for (const c of members) { _sidebarClusterOrder.push(c.id); html += clusterItemHtml(c); }
     }
   }
 
@@ -2312,7 +2325,7 @@ function renderSidebar() {
          ondragleave="this.classList.remove('drag-over')"
          ondrop="event.preventDefault();this.classList.remove('drag-over');dropOnGroup(event,null)">Ungrouped</div>`;
   }
-  for (const c of ungrouped) html += clusterItemHtml(c);
+  for (const c of ungrouped) { _sidebarClusterOrder.push(c.id); html += clusterItemHtml(c); }
 
   sidebar.innerHTML = html;
 }
