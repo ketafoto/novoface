@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -35,7 +36,19 @@ import cv2
 import numpy as np
 from PIL import Image, ExifTags
 
-DATA_DIR = Path("face_data")
+def _read_data_dir() -> Path:
+    """Read data directory from gedface_config.json if present, else use CWD-relative default."""
+    cfg = Path(__file__).parent / "gedface_config.json"
+    if cfg.exists():
+        try:
+            d = json.loads(cfg.read_text(encoding="utf-8")).get("data_dir")
+            if d:
+                return Path(d)
+        except Exception:
+            pass
+    return Path("face_data")
+
+DATA_DIR = _read_data_dir()
 DB_PATH = DATA_DIR / "faces.db"
 THUMB_DIR = DATA_DIR / "thumbs"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}

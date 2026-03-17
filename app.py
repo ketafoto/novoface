@@ -48,6 +48,19 @@ except ImportError:
 
 app = Flask(__name__)
 
+CONFIG_FILE = Path(__file__).parent / "gedface_config.json"
+
+def _load_app_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_app_config(cfg: dict):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
 BACKEND_CONFIG = DATA_DIR / "backend.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
@@ -936,6 +949,162 @@ def reset_database():
     conn.close()
     _scan_thread_backend = None
     return jsonify({"ok": True})
+
+
+@app.route("/api/db/repath", methods=["POST"])
+def api_db_repath():
+    """Replace a path prefix across all photo records (and matching scan folders).
+    Pass dry_run=true to get the count without making changes."""
+    if _scan_thread and _scan_thread.is_alive():
+        return jsonify({"error": "Cannot repath while a scan is running"}), 400
+    data = request.json or {}
+    old_prefix = data.get("old_prefix", "").strip().rstrip("/\\")
+    new_prefix = data.get("new_prefix", "").strip().rstrip("/\\")
+    dry_run = bool(data.get("dry_run", False))
+    if not old_prefix:
+        return jsonify({"error": "old_prefix required"}), 400
+
+    # Normalise separators to match what Python's Path.resolve() stores
+    old_prefix = str(Path(old_prefix))
+    if new_prefix:
+        new_prefix = str(Path(new_prefix))
+
+    like_pattern = old_prefix + "%"
+    prefix_len = len(old_prefix) + 1  # SUBSTR is 1-indexed; +1 skips the prefix itself
+
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM photos WHERE file_path LIKE ?", (like_pattern,)
+    ).fetchone()[0]
+
+    if dry_run:
+        conn.close()
+        return jsonify({"count": count})
+
+    if count:
+        conn.execute(
+            "UPDATE photos SET file_path = ? || SUBSTR(file_path, ?) "
+            "WHERE file_path LIKE ?",
+            (new_prefix, prefix_len, like_pattern),
+        )
+        conn.commit()
+    conn.close()
+
+    # Also update matching scan_folders entries
+    folders_conn = get_scan_folders_conn()
+    folders_conn.execute(
+        "UPDATE scan_folders SET folder_path = ? || SUBSTR(folder_path, ?) "
+        "WHERE folder_path LIKE ?",
+        (new_prefix, prefix_len, like_pattern),
+    )
+    folders_conn.commit()
+    folders_conn.close()
+
+    return jsonify({"ok": True, "count": count})
+
+
+@app.route("/api/db/location", methods=["GET"])
+def api_db_location_get():
+    return jsonify({"path": str(DATA_DIR.resolve())})
+
+
+@app.route("/api/db/location", methods=["POST"])
+def api_db_location_move():
+    """Move the entire DATA_DIR to a new location and persist it in gedface_config.json.
+    Requires server restart to take effect."""
+    if _scan_thread and _scan_thread.is_alive():
+        return jsonify({"error": "Cannot move database while a scan is running"}), 400
+    data = request.json or {}
+    new_dir = data.get("new_dir", "").strip()
+    if not new_dir:
+        return jsonify({"error": "new_dir required"}), 400
+
+    new_path = Path(new_dir)
+    if not new_path.is_absolute():
+        return jsonify({"error": "Please provide an absolute path"}), 400
+    if new_path.resolve() == DATA_DIR.resolve():
+        return jsonify({"error": "Same as current location"}), 400
+
+    # Reject if new_path is inside current DATA_DIR
+    try:
+        new_path.resolve().relative_to(DATA_DIR.resolve())
+        return jsonify({"error": "New location cannot be inside the current data directory"}), 400
+    except ValueError:
+        pass
+
+    import shutil
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(DATA_DIR.resolve()), str(new_path))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    cfg = _load_app_config()
+    cfg["data_dir"] = str(new_path)
+    _save_app_config(cfg)
+    return jsonify({"ok": True, "new_path": str(new_path)})
+
+
+@app.route("/api/db/remove-path", methods=["POST"])
+def api_db_remove_path():
+    """Delete all photos (and their faces + thumbnails) whose path starts with the given prefix.
+    Pass dry_run=true to get the count without making changes."""
+    if _scan_thread and _scan_thread.is_alive():
+        return jsonify({"error": "Cannot remove while a scan is running"}), 400
+    data = request.json or {}
+    prefix = data.get("prefix", "").strip().rstrip("/\\")
+    dry_run = bool(data.get("dry_run", False))
+    if not prefix:
+        return jsonify({"error": "prefix required"}), 400
+
+    prefix = str(Path(prefix))
+    like_pattern = prefix + "%"
+
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM photos WHERE file_path LIKE ?", (like_pattern,)
+    ).fetchone()[0]
+
+    if dry_run:
+        conn.close()
+        return jsonify({"count": count})
+
+    if count:
+        # Collect thumbnail paths before deletion so we can clean up files
+        thumb_rows = conn.execute(
+            "SELECT f.thumb_path FROM faces f "
+            "JOIN photos p ON p.id = f.photo_id "
+            "WHERE p.file_path LIKE ? AND f.thumb_path IS NOT NULL",
+            (like_pattern,),
+        ).fetchall()
+
+        conn.execute(
+            "DELETE FROM faces WHERE photo_id IN "
+            "(SELECT id FROM photos WHERE file_path LIKE ?)", (like_pattern,)
+        )
+        conn.execute("DELETE FROM photos WHERE file_path LIKE ?", (like_pattern,))
+        conn.commit()
+
+        for (tp,) in thumb_rows:
+            try:
+                p = Path(tp)
+                if not p.is_absolute():
+                    p = Path.cwd() / p
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    conn.close()
+
+    # Also remove matching scan_folders entries
+    folders_conn = get_scan_folders_conn()
+    folders_conn.execute(
+        "DELETE FROM scan_folders WHERE folder_path LIKE ?", (like_pattern,)
+    )
+    folders_conn.commit()
+    folders_conn.close()
+
+    return jsonify({"ok": True, "count": count})
 
 
 @app.route("/api/scan/status")

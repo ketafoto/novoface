@@ -555,6 +555,30 @@
   .btn-save { background: #1a3a1a; border-color: #2a6a2a; }
   .btn-save:hover { background: #2a5a2a; }
   .btn-merge { background: #3a1a1a; border-color: #6a2a2a; margin-left: auto; }
+  .btn-danger { background: #3a1a1a; border-color: #8a2a2a; color: #f08080; }
+  .btn-danger:hover { background: #5a1a1a; border-color: #cc4444; }
+  .db-location-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .db-location-label { font-size: 12px; color: #6b6b8a; white-space: nowrap; }
+  .db-location-path { font-size: 12px; color: #c0c0d0; flex: 1; word-break: break-all; }
+  .db-tools-divider { border-top: 1px solid #2a2d3a; margin: 8px 0; }
+  .db-tools-row { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+  .db-tools-hint { font-size: 12px; color: #6b6b8a; }
+  .repath-desc { font-size: 13px; color: #9090aa; margin-bottom: 16px; line-height: 1.5; }
+  .repath-field { margin-bottom: 12px; }
+  .repath-field label { display: block; font-size: 12px; color: #9090aa; margin-bottom: 4px; }
+  .repath-field input {
+    width: 100%; padding: 7px 10px; font-size: 13px; font-family: inherit;
+    background: #13151f; border: 1px solid #3a3d5a; border-radius: 6px;
+    color: #e0e0e0; outline: none;
+  }
+  .repath-field input:focus { border-color: #6b7fc4; }
+  .repath-preview {
+    min-height: 28px; margin-bottom: 14px;
+    font-size: 13px; color: #a5f3c4;
+  }
+  .repath-preview.warn { color: #f0c080; }
+  .repath-preview.err  { color: #f08080; }
+  .repath-btn-row { display: flex; gap: 8px; justify-content: flex-end; }
   .btn-merge:hover { background: #5a2a2a; }
 
   .face-grid {
@@ -869,6 +893,85 @@
       </div>
       <div id="scan-message"></div>
     </div>
+
+    <div class="card">
+      <div class="card-title">Database</div>
+      <div class="db-location-row">
+        <span class="db-location-label">Data directory</span>
+        <span class="db-location-path" id="db-location-path">…</span>
+        <button class="btn" onclick="showMoveDbModal()">Move…</button>
+      </div>
+      <div class="db-tools-divider"></div>
+      <div class="db-tools-row">
+        <button class="btn" onclick="showRepathModal()">Relocate Photos…</button>
+        <span class="db-tools-hint">Update photo paths after moving your archive to a new location.</span>
+      </div>
+      <div class="db-tools-row">
+        <button class="btn" onclick="showRemovePathModal()">Remove Photos by Path…</button>
+        <span class="db-tools-hint">Delete all records for a folder permanently from the database.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Repath Modal ── -->
+<div id="repath-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeRepathModal()">
+  <div class="modal" style="max-width:480px">
+    <h3>Relocate Photos</h3>
+    <p class="repath-desc">Replace a path prefix in the database — use this after moving your photo archive to a different drive or folder.</p>
+    <div class="repath-field">
+      <label>Old path prefix</label>
+      <input type="text" id="repath-old" placeholder="e.g. C:\Fotki\My.Life" autocomplete="off" oninput="repathClearPreview()">
+    </div>
+    <div class="repath-field">
+      <label>New path prefix</label>
+      <input type="text" id="repath-new" placeholder="e.g. D:\My.Life" autocomplete="off" oninput="repathClearPreview()">
+    </div>
+    <div id="repath-preview" class="repath-preview"></div>
+    <div class="repath-btn-row">
+      <button class="btn" onclick="closeRepathModal()">Cancel</button>
+      <button class="btn" onclick="repathPreview()">Preview</button>
+      <button class="btn btn-danger" id="repath-apply-btn" style="display:none" onclick="repathApply()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Move Database Modal ── -->
+<div id="move-db-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeMoveDbModal()">
+  <div class="modal" style="max-width:500px">
+    <h3>Move Data Directory</h3>
+    <p class="repath-desc">Moves the database, thumbnails, and all application data to a new folder. The server must be restarted after this operation for changes to take effect.</p>
+    <div class="repath-field">
+      <label>Current location</label>
+      <input type="text" id="move-db-current" readonly style="opacity:0.6;cursor:default">
+    </div>
+    <div class="repath-field">
+      <label>New location (absolute path)</label>
+      <input type="text" id="move-db-new" placeholder="e.g. D:\gedface_data" autocomplete="off">
+    </div>
+    <div id="move-db-status" class="repath-preview"></div>
+    <div class="repath-btn-row">
+      <button class="btn" onclick="closeMoveDbModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="doMoveDb()">Move Data</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Remove Photos by Path Modal ── -->
+<div id="remove-path-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeRemovePathModal()">
+  <div class="modal" style="max-width:480px">
+    <h3>Remove Photos by Path</h3>
+    <p class="repath-desc" style="color:#f09090">Permanently deletes all photos and detected faces whose path starts with the given prefix. This also removes matching scan folders. This operation cannot be undone.</p>
+    <div class="repath-field">
+      <label>Path prefix to remove</label>
+      <input type="text" id="remove-path-input" placeholder="e.g. C:\OldArchive\2010" autocomplete="off" oninput="removePathClearPreview()">
+    </div>
+    <div id="remove-path-preview" class="repath-preview"></div>
+    <div class="repath-btn-row">
+      <button class="btn" onclick="closeRemovePathModal()">Cancel</button>
+      <button class="btn" onclick="removePathPreview()">Preview</button>
+      <button class="btn btn-danger" id="remove-path-apply-btn" style="display:none" onclick="removePathApply()">Remove permanently</button>
+    </div>
   </div>
 </div>
 
@@ -916,6 +1019,7 @@ function switchTab(tab) {
   }
   if (tab === 'scanner') {
     loadFolders();
+    loadDbLocation();
   }
 }
 
@@ -1319,6 +1423,172 @@ async function applyCpuLimit() {
     body: JSON.stringify({cpu_percent: parseInt(v)}),
   });
   showToast(`CPU limit set to ${v}%`);
+}
+
+function showRepathModal() {
+  const modal = document.getElementById('repath-modal');
+  document.getElementById('repath-old').value = '';
+  document.getElementById('repath-new').value = '';
+  document.getElementById('repath-preview').textContent = '';
+  document.getElementById('repath-preview').className = 'repath-preview';
+  document.getElementById('repath-apply-btn').style.display = 'none';
+  modal.style.display = 'flex';
+  document.getElementById('repath-old').focus();
+}
+
+function closeRepathModal() {
+  document.getElementById('repath-modal').style.display = 'none';
+}
+
+function repathClearPreview() {
+  document.getElementById('repath-preview').textContent = '';
+  document.getElementById('repath-preview').className = 'repath-preview';
+  document.getElementById('repath-apply-btn').style.display = 'none';
+}
+
+async function repathPreview() {
+  const oldPrefix = document.getElementById('repath-old').value.trim();
+  const newPrefix = document.getElementById('repath-new').value.trim();
+  const previewEl = document.getElementById('repath-preview');
+  const applyBtn = document.getElementById('repath-apply-btn');
+  if (!oldPrefix) { previewEl.className = 'repath-preview err'; previewEl.textContent = 'Enter the old path prefix.'; applyBtn.style.display = 'none'; return; }
+  if (!newPrefix) { previewEl.className = 'repath-preview err'; previewEl.textContent = 'Enter the new path prefix.'; applyBtn.style.display = 'none'; return; }
+  previewEl.className = 'repath-preview'; previewEl.textContent = 'Checking…';
+  const r = await fetch('/api/db/repath', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({old_prefix: oldPrefix, new_prefix: newPrefix, dry_run: true}),
+  });
+  const data = await r.json();
+  if (!r.ok) { previewEl.className = 'repath-preview err'; previewEl.textContent = data.error || 'Error'; applyBtn.style.display = 'none'; return; }
+  if (data.count === 0) {
+    previewEl.className = 'repath-preview warn';
+    previewEl.textContent = 'No photos found with that prefix. Check the path and try again.';
+    applyBtn.style.display = 'none';
+  } else {
+    previewEl.className = 'repath-preview';
+    previewEl.textContent = `${data.count} photo${data.count !== 1 ? 's' : ''} will be updated.`;
+    applyBtn.style.display = '';
+  }
+}
+
+async function repathApply() {
+  const oldPrefix = document.getElementById('repath-old').value.trim();
+  const newPrefix = document.getElementById('repath-new').value.trim();
+  const previewEl = document.getElementById('repath-preview');
+  const applyBtn = document.getElementById('repath-apply-btn');
+  applyBtn.disabled = true;
+  previewEl.textContent = 'Updating…';
+  const r = await fetch('/api/db/repath', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({old_prefix: oldPrefix, new_prefix: newPrefix}),
+  });
+  const data = await r.json();
+  applyBtn.disabled = false;
+  if (!r.ok) { previewEl.className = 'repath-preview err'; previewEl.textContent = data.error || 'Failed'; return; }
+  closeRepathModal();
+  showToast(`${data.count} photo path${data.count !== 1 ? 's' : ''} updated`);
+  await loadFolders();
+}
+
+// ── Database location ──────────────────────────────────────────────────────
+
+async function loadDbLocation() {
+  const r = await fetch('/api/db/location');
+  const d = await r.json();
+  const el = document.getElementById('db-location-path');
+  if (el) el.textContent = d.path || '—';
+}
+
+function showMoveDbModal() {
+  const current = document.getElementById('db-location-path').textContent;
+  document.getElementById('move-db-current').value = current;
+  document.getElementById('move-db-new').value = '';
+  document.getElementById('move-db-status').textContent = '';
+  document.getElementById('move-db-status').className = 'repath-preview';
+  document.getElementById('move-db-modal').style.display = 'flex';
+  document.getElementById('move-db-new').focus();
+}
+
+function closeMoveDbModal() {
+  document.getElementById('move-db-modal').style.display = 'none';
+}
+
+async function doMoveDb() {
+  const newDir = document.getElementById('move-db-new').value.trim();
+  const statusEl = document.getElementById('move-db-status');
+  if (!newDir) { statusEl.className = 'repath-preview err'; statusEl.textContent = 'Enter the new directory path.'; return; }
+  statusEl.className = 'repath-preview'; statusEl.textContent = 'Moving…';
+  const r = await fetch('/api/db/location', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({new_dir: newDir}),
+  });
+  const data = await r.json();
+  if (!r.ok) { statusEl.className = 'repath-preview err'; statusEl.textContent = data.error || 'Move failed'; return; }
+  closeMoveDbModal();
+  showToast('Data moved. Please restart the server to apply the new location.');
+}
+
+// ── Remove photos by path ──────────────────────────────────────────────────
+
+function showRemovePathModal() {
+  document.getElementById('remove-path-input').value = '';
+  document.getElementById('remove-path-preview').textContent = '';
+  document.getElementById('remove-path-preview').className = 'repath-preview';
+  document.getElementById('remove-path-apply-btn').style.display = 'none';
+  document.getElementById('remove-path-modal').style.display = 'flex';
+  document.getElementById('remove-path-input').focus();
+}
+
+function closeRemovePathModal() {
+  document.getElementById('remove-path-modal').style.display = 'none';
+}
+
+function removePathClearPreview() {
+  document.getElementById('remove-path-preview').textContent = '';
+  document.getElementById('remove-path-preview').className = 'repath-preview';
+  document.getElementById('remove-path-apply-btn').style.display = 'none';
+}
+
+async function removePathPreview() {
+  const prefix = document.getElementById('remove-path-input').value.trim();
+  const previewEl = document.getElementById('remove-path-preview');
+  const applyBtn = document.getElementById('remove-path-apply-btn');
+  if (!prefix) { previewEl.className = 'repath-preview err'; previewEl.textContent = 'Enter a path prefix.'; return; }
+  previewEl.className = 'repath-preview'; previewEl.textContent = 'Checking…';
+  const r = await fetch('/api/db/remove-path', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prefix, dry_run: true}),
+  });
+  const data = await r.json();
+  if (!r.ok) { previewEl.className = 'repath-preview err'; previewEl.textContent = data.error || 'Error'; applyBtn.style.display = 'none'; return; }
+  if (data.count === 0) {
+    previewEl.className = 'repath-preview warn';
+    previewEl.textContent = 'No photos found with that prefix. Check the path and try again.';
+    applyBtn.style.display = 'none';
+  } else {
+    previewEl.className = 'repath-preview err';
+    previewEl.textContent = `${data.count} photo${data.count !== 1 ? 's' : ''} and all their detected faces will be permanently removed.`;
+    applyBtn.style.display = '';
+  }
+}
+
+async function removePathApply() {
+  const prefix = document.getElementById('remove-path-input').value.trim();
+  const previewEl = document.getElementById('remove-path-preview');
+  const applyBtn = document.getElementById('remove-path-apply-btn');
+  applyBtn.disabled = true;
+  previewEl.textContent = 'Removing…';
+  const r = await fetch('/api/db/remove-path', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prefix}),
+  });
+  const data = await r.json();
+  applyBtn.disabled = false;
+  if (!r.ok) { previewEl.className = 'repath-preview err'; previewEl.textContent = data.error || 'Failed'; return; }
+  closeRemovePathModal();
+  showToast(`${data.count} photo${data.count !== 1 ? 's' : ''} removed from database`);
+  await loadFolders();
+  await loadStats();
 }
 
 function resetDatabase() {
@@ -2426,7 +2696,7 @@ async function doMerge(sourceId, targetId) {
 async function init() {
   await loadBackend();
   await loadStats();
-  await loadFolders();
+  await Promise.all([loadFolders(), loadDbLocation()]);
 
   const scanR = await fetch('/api/scan/status');
   const scanData = await scanR.json();
