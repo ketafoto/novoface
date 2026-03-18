@@ -409,6 +409,7 @@
   @keyframes pulse { 50% { opacity: 0.5; } }
   .sidebar-header { display: flex; justify-content: space-between; align-items: center; }
   .sidebar-actions { display: flex; gap: 8px; align-items: center; }
+  .sidebar-ungrouped-stat { font-size: 11px; color: #6b6b8a; font-weight: 400; }
   .toggle-tree { font-size: 15px; line-height: 1; }
   .sidebar-action {
     font-size: 11px; color: #a5f3c4; cursor: pointer;
@@ -2291,8 +2292,12 @@ async function confirmNewGroup() {
 
 function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
+  const ungroupedCount = clusters.filter(c => !c.group_id).length;
+  const ungroupedStat = ungroupedCount > 0
+    ? `<span class="sidebar-ungrouped-stat">${ungroupedCount} ungrouped</span>` : '';
   let html = '<div class="sidebar-header">Clusters'
     + '<span class="sidebar-actions">'
+    + ungroupedStat
     + (groups.length > 0 ? '<span class="sidebar-action toggle-tree" onclick="toggleAllGroups()" title="Collapse/expand all groups">&#x229e;</span>' : '')
     + ' <span class="sidebar-action" onclick="promptNewGroup()" title="Group clusters together and give names like &#34;Igor Family&#34;, &#34;Alona Friends&#34;">+ Group</span>'
     + '</span></div>';
