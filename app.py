@@ -1303,8 +1303,19 @@ def api_merge_clusters():
 def api_move_face(fid):
     data = request.json
     conn = get_db()
+    old = conn.execute("SELECT cluster_id FROM faces WHERE id = ?", (fid,)).fetchone()
+    old_cluster_id = old[0] if old else None
     conn.execute("UPDATE faces SET cluster_id = ? WHERE id = ?",
                  (data["cluster_id"], fid))
+    if old_cluster_id is not None:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM faces WHERE cluster_id = ?", (old_cluster_id,)
+        ).fetchone()[0]
+        if remaining == 0:
+            conn.execute(
+                "DELETE FROM clusters WHERE id = ? AND merged_into IS NULL",
+                (old_cluster_id,)
+            )
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
