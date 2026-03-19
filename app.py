@@ -1149,7 +1149,9 @@ def api_open_photo():
         return jsonify({"error": "path required"}), 400
     if not Path(path).is_file():
         return jsonify({"error": "File not found"}), 404
-    os.startfile(path)
+    import subprocess
+    ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY — lets the launched app take focus
+    subprocess.Popen(f'start "" "{path}"', shell=True)
     return jsonify({"ok": True})
 
 
