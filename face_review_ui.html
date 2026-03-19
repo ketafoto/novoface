@@ -464,6 +464,7 @@
     padding: 5px 10px; font-size: 13px; cursor: pointer; color: #e0e0e0;
   }
   .ctx-cluster-row:hover { background: #2a2d3e; }
+  .ctx-cluster-row.ctx-active { background: #2a2d3e; outline: 1px solid #5c6bc0; }
   .ctx-thumb { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
   .ctx-thumb-ph { width: 26px; height: 26px; border-radius: 50%; background: #2a2d3a; flex-shrink: 0; }
   .group-divider {
@@ -704,6 +705,7 @@
     transition: background 0.15s;
   }
   .modal .merge-target:hover { background: #252840; }
+  .modal .merge-target.merge-active { background: #252840; outline: 1px solid #5c6bc0; }
   .modal .merge-target img {
     width: 32px; height: 32px;
     border-radius: 50%;
@@ -2168,7 +2170,12 @@ function showFaceContextMenu(e, faceId) {
   menu.style.visibility = '';
 
   searchEl.focus();
-  searchEl.addEventListener('input', () => renderCtxList(searchEl.value.trim()));
+  searchEl.addEventListener('input', () => {
+    const q = searchEl.value.trim();
+    renderCtxList(q);
+    const first = listEl.querySelector('.ctx-cluster-row:not(.ctx-none)');
+    if (first && q) first.classList.add('ctx-active');
+  });
   searchEl.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { closeContextMenu(); ev.stopPropagation(); }
     if (ev.key === 'Enter') {
@@ -2587,8 +2594,9 @@ function renderDetail(cluster) {
     const isSelected = selectedFaces.has(faceId);
     html += `
       <div class="face-card${isSelected ? ' selected' : ''}" onclick="copyPath('${escJs(f.file_path)}')"
-           title="Click to copy path. Check box to select for bulk move. Drag to a cluster to move. Right-click for menu."
+           title="Click to copy path · Double-click to open in default app · Drag to move · Right-click for menu"
            draggable="true"
+           ondblclick="event.stopPropagation();openPhoto('${escJs(f.file_path)}')"
            ondragstart="startFaceDrag(event,${faceId})"
            oncontextmenu="event.preventDefault();event.stopPropagation();showFaceContextMenu(event,${faceId})">
         <div class="sel-check" onclick="event.stopPropagation();toggleFaceSelect(event,${faceId},${faces.indexOf(f)})">${isSelected ? '✓' : ''}</div>
@@ -2676,6 +2684,17 @@ function copyPath(filePath) {
   });
 }
 
+async function openPhoto(filePath) {
+  const r = await fetch('/api/photos/open', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: filePath}),
+  });
+  if (!r.ok) {
+    const d = await r.json();
+    showToast(d.error || 'Failed to open file');
+  }
+}
+
 function showMergeModal() {
   if (!activeCluster) return;
   const others = clusters.filter(c => c.id !== activeCluster.id);
@@ -2726,9 +2745,18 @@ function showMergeModal() {
     }).join('');
   }
 
+  function markFirst(query) {
+    const first = listEl.querySelector('.merge-target');
+    if (first && query) first.classList.add('merge-active');
+  }
+
   renderList('');
   searchEl.focus();
-  searchEl.addEventListener('input', () => renderList(searchEl.value.trim()));
+  searchEl.addEventListener('input', () => {
+    const q = searchEl.value.trim();
+    renderList(q);
+    markFirst(q);
+  });
   searchEl.addEventListener('keydown', e => {
     if (e.key === 'Escape') { overlay.remove(); e.stopPropagation(); }
     if (e.key === 'Enter') {

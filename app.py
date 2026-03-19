@@ -1141,6 +1141,18 @@ def scan_progress():
 
 # ── Routes: review ─────────────────────────────────────────────────────────
 
+@app.route("/api/photos/open", methods=["POST"])
+def api_open_photo():
+    """Open a photo in the system default application (like double-click in Explorer)."""
+    path = (request.json or {}).get("path", "").strip()
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    if not Path(path).is_file():
+        return jsonify({"error": "File not found"}), 404
+    os.startfile(path)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/stats")
 def api_stats():
     conn = get_db()
