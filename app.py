@@ -426,12 +426,25 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
             try:
                 fhash = compute_file_hash(path)
                 if fhash in known_hashes:
-                    # Same content already processed under a different path.
-                    # Record this path too so it never shows as pending again.
-                    conn.execute(
-                        "INSERT OR IGNORE INTO photos (file_path, file_hash, processed_at) VALUES (?, ?, ?)",
-                        (str(path), fhash, datetime.now().isoformat()),
-                    )
+                    old_photo_id = known_hashes[fhash]
+                    old_path_row = conn.execute(
+                        "SELECT file_path FROM photos WHERE id=?", (old_photo_id,)
+                    ).fetchone()
+                    old_path = old_path_row[0] if old_path_row else None
+                    if old_path and not Path(old_path).exists():
+                        # Old path gone — file was renamed/moved; update in-place
+                        conn.execute(
+                            "UPDATE photos SET file_path=? WHERE id=?",
+                            (str(path), old_photo_id),
+                        )
+                        already.discard(old_path)
+                        already.add(str(path))
+                    else:
+                        # Genuine duplicate — record new path as alias
+                        conn.execute(
+                            "INSERT OR IGNORE INTO photos (file_path, file_hash, processed_at) VALUES (?, ?, ?)",
+                            (str(path), fhash, datetime.now().isoformat()),
+                        )
                     conn.commit()
                     _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
                     continue
@@ -596,12 +609,25 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
             try:
                 fhash = compute_file_hash(path)
                 if fhash in known_hashes:
-                    # Same content already processed under a different path.
-                    # Record this path too so it never shows as pending again.
-                    conn.execute(
-                        "INSERT OR IGNORE INTO photos (file_path, file_hash, processed_at) VALUES (?, ?, ?)",
-                        (str(path), fhash, datetime.now().isoformat()),
-                    )
+                    old_photo_id = known_hashes[fhash]
+                    old_path_row = conn.execute(
+                        "SELECT file_path FROM photos WHERE id=?", (old_photo_id,)
+                    ).fetchone()
+                    old_path = old_path_row[0] if old_path_row else None
+                    if old_path and not Path(old_path).exists():
+                        # Old path gone — file was renamed/moved; update in-place
+                        conn.execute(
+                            "UPDATE photos SET file_path=? WHERE id=?",
+                            (str(path), old_photo_id),
+                        )
+                        already.discard(old_path)
+                        already.add(str(path))
+                    else:
+                        # Genuine duplicate — record new path as alias
+                        conn.execute(
+                            "INSERT OR IGNORE INTO photos (file_path, file_hash, processed_at) VALUES (?, ?, ?)",
+                            (str(path), fhash, datetime.now().isoformat()),
+                        )
                     conn.commit()
                     _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
                     continue
