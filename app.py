@@ -1387,7 +1387,15 @@ def api_set_cluster_group(cid):
     data = request.json
     group_id = data.get("group_id")
     conn = get_db()
+    old = conn.execute("SELECT group_id FROM clusters WHERE id = ?", (cid,)).fetchone()
+    old_group_id = old[0] if old else None
     conn.execute("UPDATE clusters SET group_id = ? WHERE id = ?", (group_id, cid))
+    if old_group_id is not None:
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM clusters WHERE group_id = ?", (old_group_id,)
+        ).fetchone()[0]
+        if remaining == 0:
+            conn.execute("DELETE FROM cluster_groups WHERE id = ?", (old_group_id,))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
