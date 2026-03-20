@@ -410,6 +410,14 @@
   .sidebar-header { display: flex; justify-content: space-between; align-items: center; }
   .sidebar-actions { display: flex; gap: 8px; align-items: center; }
   .sidebar-ungrouped-stat { font-size: 11px; color: #6b6b8a; font-weight: 400; }
+  .sidebar-search-row { padding: 6px 8px 4px; }
+  .sidebar-search-inp {
+    width: 100%; box-sizing: border-box;
+    background: #1e2035; border: 1px solid #3a3a5c; border-radius: 4px;
+    color: #e0e0f0; font-size: 12px; padding: 4px 8px; outline: none;
+  }
+  .sidebar-search-inp:focus { border-color: #a5f3c4; }
+  .sidebar-no-results { padding: 8px 16px; font-size: 12px; color: #6b6b8a; }
   .toggle-tree { font-size: 15px; line-height: 1; }
   .sidebar-action {
     font-size: 11px; color: #a5f3c4; cursor: pointer;
@@ -1778,6 +1786,7 @@ let selectedFaces = new Set();   // Set of face IDs currently selected in detail
 let _lastSelectedIdx = -1;       // index of last toggled card, for Shift+click range
 let _sidebarClusterOrder = [];   // flat ordered list of cluster IDs as rendered in sidebar
 let _lastClusterClickIdx = -1;   // anchor index for Shift+click range selection
+let _sidebarSearch = '';         // current sidebar cluster search query
 
 async function loadGroups() {
   const r = await fetch('/api/groups');
@@ -2299,6 +2308,18 @@ async function confirmNewGroup() {
 
 function renderSidebar() {
   const sidebar = document.getElementById('sidebar');
+  const _prevSearchEl = document.getElementById('sidebar-search');
+  const wasSearchFocused = document.activeElement === _prevSearchEl;
+  const searchSelStart = wasSearchFocused ? _prevSearchEl.selectionStart : null;
+  const searchSelEnd   = wasSearchFocused ? _prevSearchEl.selectionEnd   : null;
+
+  let rx = null;
+  if (_sidebarSearch) {
+    try { rx = new RegExp(_sidebarSearch, 'i'); }
+    catch { rx = new RegExp(_sidebarSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+  }
+  const matches = c => !rx || rx.test(c.name || '') || rx.test(String(c.id));
+
   const ungroupedCount = clusters.filter(c => !c.group_id).length;
   const ungroupedStat = ungroupedCount > 0
     ? `<span class="sidebar-ungrouped-stat">${ungroupedCount} ungrouped</span>` : '';
@@ -2307,7 +2328,9 @@ function renderSidebar() {
     + ungroupedStat
     + (groups.length > 0 ? '<span class="sidebar-action toggle-tree" onclick="toggleAllGroups()" title="Collapse/expand all groups">&#x229e;</span>' : '')
     + ' <span class="sidebar-action" onclick="promptNewGroup()" title="Group clusters together and give names like &#34;Igor Family&#34;, &#34;Alona Friends&#34;">+ Group</span>'
-    + '</span></div>';
+    + '</span></div>'
+    + '<div class="sidebar-search-row"><input id="sidebar-search" class="sidebar-search-inp"'
+    + ` type="text" placeholder="Search clusters\u2026" autocomplete="off" value="${esc(_sidebarSearch)}"></div>`;
   if (_thumbsLoading) {
     html += `<div class="sidebar-loading">${esc(_thumbsProgress)}</div>`;
   }
@@ -2315,8 +2338,10 @@ function renderSidebar() {
   _sidebarClusterOrder = [];
   const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
   for (const g of sortedGroups) {
-    const members = sortClusters(clusters.filter(c => c.group_id === g.id));
-    const collapsed = collapsedGroups.has(g.id);
+    const allMembers = sortClusters(clusters.filter(c => c.group_id === g.id));
+    const members = allMembers.filter(matches);
+    if (members.length === 0) continue;
+    const collapsed = !rx && collapsedGroups.has(g.id);
     const arrow = collapsed ? '\u25b6' : '\u25bc';
     const count = members.reduce((s, c) => s + c.face_count, 0);
     html += `
@@ -2337,7 +2362,7 @@ function renderSidebar() {
     }
   }
 
-  const ungrouped = sortClusters(clusters.filter(c => !c.group_id));
+  const ungrouped = sortClusters(clusters.filter(c => !c.group_id)).filter(matches);
   if (ungrouped.length > 0 && sortedGroups.length > 0) {
     html += `<div class="group-divider"
          ondragover="event.preventDefault();this.classList.add('drag-over')"
@@ -2345,8 +2370,18 @@ function renderSidebar() {
          ondrop="event.preventDefault();this.classList.remove('drag-over');dropOnGroup(event,null)">Ungrouped</div>`;
   }
   for (const c of ungrouped) { _sidebarClusterOrder.push(c.id); html += clusterItemHtml(c); }
+  if (rx && _sidebarClusterOrder.length === 0) {
+    html += '<div class="sidebar-no-results">No matches</div>';
+  }
 
   sidebar.innerHTML = html;
+
+  const inp = sidebar.querySelector('#sidebar-search');
+  inp.addEventListener('input', () => { _sidebarSearch = inp.value.trim(); renderSidebar(); });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { _sidebarSearch = ''; renderSidebar(); }
+  });
+  if (wasSearchFocused) { inp.focus(); if (searchSelStart !== null) inp.setSelectionRange(searchSelStart, searchSelEnd); }
 }
 
 function toggleGroup(gid) {
