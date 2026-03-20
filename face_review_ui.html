@@ -473,6 +473,7 @@
   }
   .ctx-cluster-row:hover { background: #2a2d3e; }
   .ctx-cluster-row.ctx-active { background: #2a2d3e; outline: 1px solid #5c6bc0; }
+  .ctx-cluster-row:focus { background: #2a2d3e; outline: 1px solid #5c6bc0; }
   .ctx-thumb { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
   .ctx-thumb-ph { width: 26px; height: 26px; border-radius: 50%; background: #2a2d3a; flex-shrink: 0; }
   .group-divider {
@@ -714,6 +715,7 @@
   }
   .modal .merge-target:hover { background: #252840; }
   .modal .merge-target.merge-active { background: #252840; outline: 1px solid #5c6bc0; }
+  .modal .merge-target:focus { background: #252840; outline: 1px solid #5c6bc0; }
   .modal .merge-target img {
     width: 32px; height: 32px;
     border-radius: 50%;
@@ -2162,12 +2164,15 @@ function showFaceContextMenu(e, faceId) {
     }
     listEl.innerHTML = visible.map(c => {
       const thumb = firstThumb[c.id] || '';
-      return `<div class="ctx-cluster-row" onclick="moveFacesToCluster(${JSON.stringify(faceIds)}, ${c.id})">
+      return `<div class="ctx-cluster-row" tabindex="0" onclick="moveFacesToCluster(${JSON.stringify(faceIds)}, ${c.id})">
         ${thumb ? `<img src="${thumb}" class="ctx-thumb" alt="">` : '<div class="ctx-thumb-ph"></div>'}
         <span>${esc(c.name || 'Unnamed')}</span>
       </div>`;
     }).join('');
   }
+
+  function ctxRows() { return [...listEl.querySelectorAll('.ctx-cluster-row:not(.ctx-none)')]; }
+  function focusRow(row) { if (row) { ctxRows().forEach(r => r.classList.remove('ctx-active')); row.focus(); row.scrollIntoView({block: 'nearest'}); } }
 
   renderCtxList('');
 
@@ -2182,15 +2187,23 @@ function showFaceContextMenu(e, faceId) {
   searchEl.addEventListener('input', () => {
     const q = searchEl.value.trim();
     renderCtxList(q);
-    const first = listEl.querySelector('.ctx-cluster-row:not(.ctx-none)');
+    const first = ctxRows()[0];
     if (first && q) first.classList.add('ctx-active');
   });
   searchEl.addEventListener('keydown', ev => {
     if (ev.key === 'Escape') { closeContextMenu(); ev.stopPropagation(); }
-    if (ev.key === 'Enter') {
-      const first = listEl.querySelector('.ctx-cluster-row:not(.ctx-none)');
-      if (first) first.click();
-    }
+    else if (ev.key === 'Enter') { const first = ctxRows()[0]; if (first) first.click(); }
+    else if (ev.key === 'ArrowDown' || ev.key === 'Tab') { ev.preventDefault(); focusRow(ctxRows()[0]); }
+    ev.stopPropagation();
+  });
+  listEl.addEventListener('keydown', ev => {
+    const rows = ctxRows();
+    const idx = rows.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); focusRow(rows[idx + 1]); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); idx <= 0 ? searchEl.focus() : focusRow(rows[idx - 1]); }
+    else if (ev.key === 'Enter') { if (idx >= 0) rows[idx].click(); }
+    else if (ev.key === 'Escape') { closeContextMenu(); }
+    else if (ev.key.length === 1) { searchEl.focus(); searchEl.value += ev.key; searchEl.dispatchEvent(new Event('input')); }
     ev.stopPropagation();
   });
   setTimeout(() => document.addEventListener('click', closeContextMenu, {once: true}), 0);
@@ -2773,16 +2786,20 @@ function showMergeModal() {
     listEl.innerHTML = visible.map(c => {
       const name = c.name || 'Unnamed';
       const thumb = firstThumb[c.id] || '';
-      return `<div class="merge-target" onclick="doMerge(${activeCluster.id}, ${c.id})">
+      return `<div class="merge-target" tabindex="0" onclick="doMerge(${activeCluster.id}, ${c.id})">
         ${thumb ? `<img src="${thumb}" alt="">` : '<div style="width:32px;height:32px;border-radius:50%;background:#2a2d3a"></div>'}
         <span>${esc(name)} (${c.face_count} photos)</span>
       </div>`;
     }).join('');
   }
 
-  function markFirst(query) {
-    const first = listEl.querySelector('.merge-target');
-    if (first && query) first.classList.add('merge-active');
+  function mergeRows() { return [...listEl.querySelectorAll('.merge-target')]; }
+  function focusMergeRow(row) {
+    if (row) {
+      mergeRows().forEach(r => r.classList.remove('merge-active'));
+      row.focus();
+      row.scrollIntoView({block: 'nearest'});
+    }
   }
 
   renderList('');
@@ -2790,14 +2807,24 @@ function showMergeModal() {
   searchEl.addEventListener('input', () => {
     const q = searchEl.value.trim();
     renderList(q);
-    markFirst(q);
+    const first = mergeRows()[0];
+    if (first && q) first.classList.add('merge-active');
   });
   searchEl.addEventListener('keydown', e => {
     if (e.key === 'Escape') { overlay.remove(); e.stopPropagation(); }
-    if (e.key === 'Enter') {
-      const first = listEl.querySelector('.merge-target');
-      if (first) first.click();
-    }
+    else if (e.key === 'Enter') { const first = mergeRows()[0]; if (first) first.click(); }
+    else if (e.key === 'ArrowDown' || e.key === 'Tab') { e.preventDefault(); focusMergeRow(mergeRows()[0]); }
+    e.stopPropagation();
+  });
+  listEl.addEventListener('keydown', e => {
+    const rows = mergeRows();
+    const idx = rows.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusMergeRow(rows[idx + 1]); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); idx <= 0 ? searchEl.focus() : focusMergeRow(rows[idx - 1]); }
+    else if (e.key === 'Enter') { if (idx >= 0) rows[idx].click(); }
+    else if (e.key === 'Escape') { overlay.remove(); }
+    else if (e.key.length === 1) { searchEl.focus(); searchEl.value += e.key; searchEl.dispatchEvent(new Event('input')); }
+    e.stopPropagation();
   });
 }
 
