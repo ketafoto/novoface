@@ -1176,7 +1176,10 @@ def api_open_photo():
     if not Path(path).is_file():
         return jsonify({"error": "File not found"}), 404
     import subprocess
-    ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY — lets the launched app take focus
+    # keybd_event(0,0,0,0) is a known Windows trick to mark this process as having
+    # received recent input, which unlocks foreground-stealing for AllowSetForegroundWindow
+    ctypes.windll.user32.keybd_event(0, 0, 0, 0)
+    ctypes.windll.user32.AllowSetForegroundWindow(-1)
     subprocess.Popen(f'start "" "{path}"', shell=True)
     return jsonify({"ok": True})
 
