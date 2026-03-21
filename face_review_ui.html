@@ -108,6 +108,16 @@
     color: #9aa0a6;
     line-height: 1.4;
   }
+  .thumb-load-progress {
+    padding: 6px 16px;
+    font-size: 12px;
+    color: #9aa0a6;
+    background: #13151f;
+    border-bottom: 1px solid #1e2030;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
 
   /* ── Scanner View ── */
   .scanner-content {
@@ -1782,6 +1792,7 @@ let collapsedGroups = new Set();
 
 let _thumbsLoading = false;
 let _thumbsProgress = '';
+let _detailLoadGen = 0;  // incremented on each selectCluster/peekCluster to cancel stale loads
 
 let selectedClusters = new Set(); // Set of cluster IDs selected in sidebar (Ctrl+click or Shift+click)
 let selectedFaces = new Set();   // Set of face IDs currently selected in detail pane
@@ -2522,6 +2533,7 @@ async function confirmDeleteGroup() {
 }
 
 async function selectCluster(id) {
+  const gen = ++_detailLoadGen;
   selectedFaces.clear();
   _lastSelectedIdx = -1;
   activeCluster = clusters.find(c => c.id === id);
@@ -2530,6 +2542,7 @@ async function selectCluster(id) {
     const r = await fetch(`/api/clusters/${id}/faces`);
     clusterFaces[id] = await r.json();
   }
+  if (_detailLoadGen !== gen) return; // user switched clusters while fetching
   const faces = clusterFaces[id] || [];
   if (faces.length > 0) {
     const thumbPathsInCluster = new Set(faces.map(f => f.thumb_path).filter(Boolean));
@@ -2548,7 +2561,24 @@ async function selectCluster(id) {
   }
   const paths = faces.map(f => f.thumb_path).filter(Boolean);
   detailThumbCache = {};
+  // Render immediately with /thumbs/ fallback URLs — user sees photos right away
+  renderDetail();
+  if (paths.length === 0) return;
+  // Show progress indicator for large clusters
+  const total = paths.length;
+  let loaded = 0;
+  if (total > 20) {
+    const grid = document.querySelector('#main .face-grid');
+    if (grid && !document.getElementById('thumb-load-progress')) {
+      const progEl = document.createElement('div');
+      progEl.id = 'thumb-load-progress';
+      progEl.className = 'thumb-load-progress';
+      progEl.textContent = `Loading thumbnails… 0 / ${total}`;
+      grid.before(progEl);
+    }
+  }
   for (let i = 0; i < paths.length; i += 10) {
+    if (_detailLoadGen !== gen) return; // user switched clusters
     const chunk = paths.slice(i, i + 10);
     const tr = await fetch('/api/thumbs', {
       method: 'POST',
@@ -2557,24 +2587,50 @@ async function selectCluster(id) {
     });
     const base64ByPath = await tr.json();
     for (const [p, b64] of Object.entries(base64ByPath)) {
-      if (b64) detailThumbCache[p] = `data:image/jpeg;base64,${b64}`;
+      if (b64) {
+        detailThumbCache[p] = `data:image/jpeg;base64,${b64}`;
+        const img = document.querySelector(`img[data-thumb="${CSS.escape(p)}"]`);
+        if (img) img.src = detailThumbCache[p];
+      }
+    }
+    loaded += chunk.length;
+    const progEl = document.getElementById('thumb-load-progress');
+    if (progEl) {
+      if (loaded >= total) progEl.remove();
+      else progEl.textContent = `Loading thumbnails… ${loaded} / ${total}`;
     }
   }
-  renderDetail();
 }
 
 async function peekCluster(id) {
   // Show a cluster's faces without changing activeCluster or selectedClusters.
+  const gen = ++_detailLoadGen;
   const peeked = clusters.find(c => c.id === id);
   if (!peeked) return;
   if (!clusterFaces[id]) {
     const r = await fetch(`/api/clusters/${id}/faces`);
     clusterFaces[id] = await r.json();
   }
+  if (_detailLoadGen !== gen) return;
   const faces = clusterFaces[id] || [];
   const paths = faces.map(f => f.thumb_path).filter(Boolean);
   detailThumbCache = {};
+  renderDetail(peeked);
+  if (paths.length === 0) return;
+  const total = paths.length;
+  let loaded = 0;
+  if (total > 20) {
+    const grid = document.querySelector('#main .face-grid');
+    if (grid && !document.getElementById('thumb-load-progress')) {
+      const progEl = document.createElement('div');
+      progEl.id = 'thumb-load-progress';
+      progEl.className = 'thumb-load-progress';
+      progEl.textContent = `Loading thumbnails… 0 / ${total}`;
+      grid.before(progEl);
+    }
+  }
   for (let i = 0; i < paths.length; i += 10) {
+    if (_detailLoadGen !== gen) return;
     const chunk = paths.slice(i, i + 10);
     const tr = await fetch('/api/thumbs', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -2582,10 +2638,19 @@ async function peekCluster(id) {
     });
     const base64ByPath = await tr.json();
     for (const [p, b64] of Object.entries(base64ByPath)) {
-      if (b64) detailThumbCache[p] = `data:image/jpeg;base64,${b64}`;
+      if (b64) {
+        detailThumbCache[p] = `data:image/jpeg;base64,${b64}`;
+        const img = document.querySelector(`img[data-thumb="${CSS.escape(p)}"]`);
+        if (img) img.src = detailThumbCache[p];
+      }
+    }
+    loaded += chunk.length;
+    const progEl = document.getElementById('thumb-load-progress');
+    if (progEl) {
+      if (loaded >= total) progEl.remove();
+      else progEl.textContent = `Loading thumbnails… ${loaded} / ${total}`;
     }
   }
-  renderDetail(peeked);
 }
 
 function renderDetail(cluster) {
@@ -2648,7 +2713,7 @@ function renderDetail(cluster) {
            ondragstart="startFaceDrag(event,${faceId})"
            oncontextmenu="event.preventDefault();event.stopPropagation();showFaceContextMenu(event,${faceId})">
         <div class="sel-check" onclick="event.stopPropagation();toggleFaceSelect(event,${faceId},${faces.indexOf(f)})">${isSelected ? '✓' : ''}</div>
-        <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" alt="face" loading="lazy" draggable="false">
+        <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" data-thumb="${esc(f.thumb_path)}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
           <span class="date">${year}</span>
           ${ageStr ? `<span class="age">${ageStr}</span>` : ''}
