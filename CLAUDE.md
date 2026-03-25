@@ -1,4 +1,6 @@
-# gedface — Project Context for Claude Code
+# novoface — Project Context for Claude Code
+
+*Last updated: 2026-03-24*
 
 > **For Claude:** Keep this file up to date. After every change that affects
 > architecture, data flow, DB schema, API contracts, or key design decisions,
@@ -14,21 +16,34 @@ and lets the user review and correct the groupings in a browser UI.
 
 | File | Role |
 |---|---|
+| `main.py` | Desktop launcher — pywebview window, first-run setup dialog, starts Flask |
 | `app.py` | Flask server — all API routes, scan management, CPU/IO throttling |
 | `face_review_ui.html` | Single-page browser UI (HTML + vanilla JS, one large file) |
 | `face_scan.py` | Photo scanning, face detection, DB schema, `cluster_faces()` |
 | `openvino_pipeline.py` | Intel GPU (Iris Xe) backend; imports `cluster_faces` from face_scan |
+| `novoface.spec` | PyInstaller build spec → `dist/novoface/novoface.exe` |
+| `installer/novoface.iss` | Inno Setup 6 script → `installer/Output/novoface-setup.exe` |
 
 ---
 
 ## Data Storage
 
 - **Database**: SQLite, WAL mode, 30 s busy timeout
-- **Active backend** controlled by `face_data/backend.json` → `{"backend": "openvino"}`
-- CPU backend DB: `face_data/faces.db`
-- OpenVINO backend DB: `face_data/faces_ov.db`
-- Thumbnails: `face_data/thumbs/` (CPU) or `face_data/thumbs_ov/` (OpenVINO)
-- ⚠️ All paths are **relative to CWD** — server must be started from project root
+- **Active backend** controlled by `backend.json` → `{"backend": "openvino"}`
+- CPU backend DB: `faces.db`
+- OpenVINO backend DB: `faces_ov.db`
+- Thumbnails: `thumbs/` (CPU) or `thumbs_ov/` (OpenVINO)
+
+### Data directory resolution (priority order)
+
+1. `NOVOFACE_DATA_DIR` env var — set by `main.py` to the OS user-data dir:
+   - Windows: `%LOCALAPPDATA%\novoface\`  (e.g. `C:\Users\Alice\AppData\Local\novoface\`)
+   - Linux:   `~/.local/share/novoface/`
+2. `novoface_config.json` `"data_dir"` key — power-user / CI override
+3. `./face_data` relative to CWD — legacy dev workflow (`python app.py`)
+
+When launched via `main.py` (packaged app), option 1 is always active.
+When launched via `python app.py` directly (dev), option 3 is used — behaviour unchanged.
 
 ### Schema
 
@@ -111,10 +126,18 @@ Committed immediately. Source cluster is kept (archived via `merged_into`) for h
 | `GET  /api/groups` | List cluster_groups |
 | `POST /api/groups` | Create group |
 | `PUT  /api/clusters/<id>/group` | Assign cluster to group |
+| `GET  /api/log/settings` | Return `{enabled, max_mb, path}` |
+| `POST /api/log/settings` | Update log settings + apply live |
+| `POST /api/log/clear` | Truncate log file |
+| `POST /api/log/open` | Open log in system default viewer |
 
 ---
 
-## UI (face_review_ui.html) — Key JS Functions
+## UI (face_review_ui.html) — Tabs
+
+Three tabs: **Scanner** (folders, scan settings, progress), **Review** (cluster browsing/naming/merging), **Settings** (logging config, database tools).
+
+### Key JS Functions
 
 | Function | Purpose |
 |---|---|
@@ -123,13 +146,66 @@ Committed immediately. Source cluster is kept (archived via `merged_into`) for h
 | `showMergeModal()` | Show sorted list of merge targets |
 | `doMerge(src, tgt)` | POST merge, refresh UI |
 | `loadStats()` | Update photo/face/cluster counts in header |
+| `loadLogSettings()` | Fetch log config from `/api/log/settings`, populate Settings tab |
+| `saveLogSettings()` | POST updated log config; applied live via `reconfigure_logging()` in main.py |
+
+---
+
+## Desktop Packaging (Windows)
+
+### Development run (unchanged)
+```
+python app.py          # uses ./face_data, opens browser automatically
+```
+
+### Packaged app run
+```
+python main.py         # uses %LOCALAPPDATA%\novoface\, opens pywebview window
+```
+
+### Build steps
+
+Install prerequisites once (Inno Setup `--location` is required — without it winget
+installs to an unresolvable path):
+```powershell
+pip install pyinstaller pywebview platformdirs   # add: pip install openvino  for GPU support
+winget install --id JRSoftware.InnoSetup --location "C:\Program Files\Inno Setup 6" --accept-package-agreements --accept-source-agreements
+```
+
+Then build (or just run `.\installer\build.ps1`):
+```powershell
+python version.py           # → installer/version.iss + installer/version_info.txt
+pyinstaller novoface.spec   # → dist/novoface/
+& "C:\Program Files\Inno Setup 6\ISCC.exe" installer\novoface.iss
+# → installer/Output/novoface-0.0.1-setup.exe
+```
+
+### First-run setup dialog
+On first launch (no database found in data dir), `main.py` shows a tkinter dialog:
+- **Data location** field (read-only) — shows the platformdirs path
+- **Import existing face_data** field + Browse button — optional, user-provided path
+- **Enable GPU acceleration** checkbox — shown only when `openvino` is bundled **and** an Intel Iris Xe / Arc GPU is detected via `wmic`. Pre-checked by default.
+- **Start Fresh** / **Import & Start** buttons
+
+If the user provides an import path, all files from that folder are copied into the data dir before Flask starts.
+
+If the GPU checkbox is checked, a second progress dialog downloads the OpenVINO face models (~262 MB total) and writes `backend.json = {"backend": "openvino"}` so the GPU backend is pre-selected when the UI opens. On download failure, a warning is shown and the app falls back to CPU.
+
+The setup screen never appears again once a database exists.
+
+### PyInstaller notes
+- `face_review_ui.html` is included as a data file; `app.py`'s `_base_dir()` resolves it correctly both frozen and non-frozen via `sys._MEIPASS`.
+- `console=False` in the spec suppresses the black CMD window.
+- First build always requires manual testing — insightface/onnxruntime native DLLs sometimes need explicit `--collect-all` entries (already in the spec).
+- `openvino` is collected with `try/except` — if not installed in the build environment the bundle is CPU-only and the GPU option is hidden in the setup dialog. To include GPU support: `pip install openvino` before running `pyinstaller novoface.spec`.
+- OpenVINO models (~262 MB) are **not** bundled — downloaded at first run via `urllib.request` (standard library, no extra deps).
 
 ---
 
 ## Known Issues / Design Notes
 
-- `DATA_DIR = Path("face_data")` in face_scan.py is relative to CWD — if the server
-  is started from the wrong directory a fresh empty DB is created silently.
 - Orphan child processes (e.g. OpenVINO workers) are cleaned up via `atexit` in app.py.
 - `cluster_groups` and `scan_folders` live only in `faces.db` (the CPU DB), even when
   the active backend is OpenVINO. `get_scan_folders_conn()` always returns a CPU DB connection.
+- When running as a packaged app, the CWD-relative `./face_data` fallback in `face_scan.py`
+  is never reached because `main.py` always sets `NOVOFACE_DATA_DIR` before Flask starts.

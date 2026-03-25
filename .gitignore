@@ -6,3 +6,11 @@ venv/
 *.db
 face_data/
 .claude/settings.*
+
+# PyInstaller build artifacts
+build/
+
+# Inno Setup output
+installer/Output/
+installer/version.iss
+installer/version_info.txt

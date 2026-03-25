@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -32,13 +33,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+_log = logging.getLogger(__name__)
+
 import cv2
 import numpy as np
 from PIL import Image, ExifTags
 
 def _read_data_dir() -> Path:
-    """Read data directory from gedface_config.json if present, else use CWD-relative default."""
-    cfg = Path(__file__).parent / "gedface_config.json"
+    """
+    Resolve the data directory in priority order:
+      1. NOVOFACE_DATA_DIR env var — set by the desktop launcher (main.py) to the
+         platform-appropriate user data dir (e.g. %LOCALAPPDATA%\\novoface on Windows).
+      2. novoface_config.json "data_dir" key — power-user / CI override.
+      3. ./face_data relative to CWD — legacy dev workflow (python app.py).
+    """
+    env = os.environ.get("NOVOFACE_DATA_DIR")
+    if env:
+        return Path(env)
+    cfg = Path(__file__).parent / "novoface_config.json"
     if cfg.exists():
         try:
             d = json.loads(cfg.read_text(encoding="utf-8")).get("data_dir")
@@ -317,11 +329,11 @@ def cluster_faces(
 
     progress_cb(done, total) is called periodically so UI can show progress.
     """
-    print("\nClustering faces...")
+    _log.info("clustering faces...")
 
     rows = conn.execute("SELECT id, encoding, cluster_id FROM faces ORDER BY id").fetchall()
     if not rows:
-        print("No faces to cluster.")
+        _log.info("no faces to cluster")
         return
 
     face_ids  = [r[0] for r in rows]
@@ -355,7 +367,7 @@ def cluster_faces(
             if progress_cb:
                 progress_cb(i + 1, total)
             else:
-                print(f"  clustering {i + 1}/{total} faces...", end="\r")
+                _log.debug("clustering %d/%d faces", i + 1, total)
 
         if cur_cluster[i] is not None:
             continue   # already assigned — never overwrite
@@ -382,7 +394,7 @@ def cluster_faces(
             next_cluster_id += 1
 
     if not assignments:
-        print("  No unassigned faces found.")
+        _log.info("no unassigned faces found")
         return
 
     # Build the new assignments in a temp table first so the main DB write lock
@@ -429,7 +441,7 @@ def cluster_faces(
     conn.execute("DROP TABLE temp.cluster_assignments")
     conn.commit()
 
-    print(f"  {len(assignments)} new faces assigned, {len(cluster_reps)} clusters total")
+    _log.info("%d new faces assigned, %d clusters total", len(assignments), len(cluster_reps))
 
 
 def _face_providers():
@@ -463,8 +475,10 @@ def scan_archive(
     known_hashes = dict(
         conn.execute("SELECT file_hash, id FROM photos WHERE file_hash IS NOT NULL").fetchall()
     )
+    _log.info("already processed: %d files (%d with hash)", len(processed_paths), len(known_hashes))
     print(f"Already processed: {len(processed_paths)} files ({len(known_hashes)} with hash)")
 
+    _log.info("scanning %s for photos", archive_path)
     print(f"Scanning {archive_path} for photos...")
     photo_files = []
     for root, _, files in os.walk(archive_path):
@@ -484,6 +498,7 @@ def scan_archive(
         return
 
     providers = _face_providers()
+    _log.info("loading model: %s providers=%s", model_name, providers)
     print(f"Loading face detection model ({model_name}, {providers[0]})...")
     face_app = FaceAnalysis(name=model_name, providers=providers)
     face_app.prepare(ctx_id=-1, det_size=(det_size, det_size))
@@ -550,6 +565,7 @@ def scan_archive(
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(
         description="Scan a photo archive for faces and cluster them."
     )

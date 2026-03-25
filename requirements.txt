@@ -8,3 +8,6 @@ numpy
 scikit-learn
 flask
 psutil
+# Belows are for one-time setup installer for Windows
+platformdirs
+pywebview

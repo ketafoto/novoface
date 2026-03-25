@@ -1,5 +1,5 @@
 """
-app.py — Unified web application for gedface.
+app.py — Unified web application for novoface.
 
 Single entry point that provides both scan management and cluster review
 in one browser tab. Replaces the separate face_scan.py + face_review.py workflow.
@@ -15,6 +15,8 @@ import base64
 import ctypes
 import fnmatch
 import json
+import logging
+import re
 import os
 import sys
 import sqlite3
@@ -25,8 +27,19 @@ from datetime import datetime
 from pathlib import Path
 from threading import Timer
 
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory, stream_with_context
 
+_log = logging.getLogger(__name__)
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class _PlainFormatter(logging.Formatter):
+    """Strip ANSI colour codes so Werkzeug's coloured warnings look clean in the log file."""
+    def format(self, record: logging.LogRecord) -> str:
+        return _ANSI_RE.sub("", super().format(record))
+
+from version import __version__
 from face_scan import (
     DATA_DIR,
     DB_PATH,
@@ -48,7 +61,56 @@ except ImportError:
 
 app = Flask(__name__)
 
-CONFIG_FILE = Path(__file__).parent / "gedface_config.json"
+
+def _ensure_logging() -> None:
+    """Set up file logging when app.py is run directly (main.py not imported).
+
+    main.py installs a RotatingFileHandler before importing app.  When the
+    developer runs `python app.py` that handler is absent, so all _log.*
+    calls silently disappear.  This function adds one if none exists yet.
+    """
+    import logging.handlers as _lh
+
+    root = logging.getLogger()
+    if any(isinstance(h, _lh.RotatingFileHandler) for h in root.handlers):
+        return  # already configured by main.py
+
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = DATA_DIR / "novoface.log"
+    except Exception:
+        import tempfile
+        log_path = Path(tempfile.gettempdir()) / "novoface.log"
+
+    # Read persisted settings so the level matches whatever the user set in the UI
+    try:
+        import json as _json
+        s = _json.loads((DATA_DIR / "settings.json").read_text(encoding="utf-8"))
+        enabled = bool(s.get("log_enabled", True))
+        max_mb  = int(s.get("log_max_mb", 5))
+    except Exception:
+        enabled, max_mb = True, 5
+
+    handler = _lh.RotatingFileHandler(
+        str(log_path), maxBytes=max_mb * 1024 * 1024, backupCount=2, encoding="utf-8"
+    )
+    handler.setFormatter(_PlainFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if enabled else logging.WARNING)
+    logging.info("app.py: logging initialised (no main.py) — log: %s", log_path)
+
+
+_ensure_logging()
+
+
+def _base_dir() -> Path:
+    """Directory containing app resources.  Works both from source and when frozen by PyInstaller."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+
+CONFIG_FILE = Path(__file__).parent / "novoface_config.json"
 
 def _load_app_config() -> dict:
     if CONFIG_FILE.exists():
@@ -291,7 +353,7 @@ def _apply_cpu_limit(cpu_percent):
         except OSError as e:
             # Nested job objects are supported on Win8+; older systems or
             # already-constrained environments may fail — log and continue.
-            print(f"[cpu_limit] Job Object failed ({e}); no CPU cap applied.")
+            _log.warning("Job Object failed (%s); no CPU cap applied.", e)
 
         # Lower I/O priority for this thread so photo reads don't compete
         # with interactive/system I/O.  THREAD_MODE_BACKGROUND_BEGIN sets
@@ -674,7 +736,7 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
 
 @app.route("/")
 def index():
-    resp = send_file("face_review_ui.html")
+    resp = send_file(_base_dir() / "face_review_ui.html")
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
 
@@ -738,18 +800,27 @@ def api_browse():
 
     parent = str(p.parent) if p.parent != p else None
 
-    dirs = []
+    # Optional: also list files with matching extensions (e.g. ".db,.tar.gz")
+    file_exts = {
+        e.strip().lower()
+        for e in request.args.get("file_exts", "").split(",")
+        if e.strip()
+    }
+
+    dirs, files = [], []
     try:
         for item in sorted(p.iterdir(), key=lambda x: x.name.lower()):
             try:
                 if item.is_dir():
                     dirs.append({"name": item.name, "path": str(item)})
+                elif file_exts and item.suffix.lower() in file_exts:
+                    files.append({"name": item.name, "path": str(item)})
             except (PermissionError, OSError):
                 pass
     except (PermissionError, OSError):
         pass
 
-    return jsonify({"current": str(p), "parent": parent, "dirs": dirs})
+    return jsonify({"current": str(p), "parent": parent, "dirs": dirs, "files": files})
 
 
 # ── Routes: scan management ────────────────────────────────────────────────
@@ -819,6 +890,86 @@ def post_scan_settings():
     if "exclude_patterns" in data:
         s["exclude_patterns"] = str(data["exclude_patterns"])
     save_settings(s)
+    return jsonify({"ok": True})
+
+
+# ── Log settings API ──────────────────────────────────────────────────────────
+
+def _log_path() -> Path:
+    return DATA_DIR / "novoface.log"
+
+
+@app.route("/api/log/settings", methods=["GET"])
+def get_log_settings():
+    s = load_settings()
+    return jsonify({
+        "enabled": bool(s.get("log_enabled", True)),
+        "max_mb":  int(s.get("log_max_mb", 5)),
+        "path":    str(_log_path()),
+    })
+
+
+@app.route("/api/log/settings", methods=["POST"])
+def post_log_settings():
+    data = request.json or {}
+    s = load_settings()
+    if "enabled" in data:
+        s["log_enabled"] = bool(data["enabled"])
+    if "max_mb" in data:
+        s["log_max_mb"] = max(1, int(data["max_mb"]))
+    save_settings(s)
+    # Apply live — works whether launched via main.py or python app.py
+    try:
+        import main as _main
+        _main.reconfigure_logging(s["log_enabled"], s["log_max_mb"])
+    except Exception:
+        import logging as _logging
+        import logging.handlers as _lh
+        root = _logging.getLogger()
+        root.setLevel(_logging.DEBUG if s.get("log_enabled", True) else _logging.WARNING)
+        for h in root.handlers:
+            if isinstance(h, _lh.RotatingFileHandler):
+                h.maxBytes = s.get("log_max_mb", 5) * 1024 * 1024
+    _log.info("log settings updated: enabled=%s max_mb=%s",
+              s.get("log_enabled"), s.get("log_max_mb"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/log/clear", methods=["POST"])
+def clear_log():
+    p = _log_path()
+    try:
+        # Truncate via the open handler if possible, otherwise reopen
+        import logging.handlers as _lh
+        for h in logging.getLogger().handlers:
+            if isinstance(h, _lh.RotatingFileHandler):
+                h.stream.seek(0)
+                h.stream.truncate()
+                _log.info("log cleared")
+                return jsonify({"ok": True})
+        # Fallback: truncate directly
+        p.write_text("", encoding="utf-8")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.route("/api/log/open", methods=["POST"])
+def open_log():
+    p = _log_path()
+    if not p.exists():
+        return jsonify({"error": "Log file does not exist yet"}), 404
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(p))
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.Popen(["open", str(p)])
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", str(p)])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})
 
 
@@ -915,6 +1066,8 @@ def start_scan():
             args=(folders, threshold, cpu_percent, _scan_ref, exclude_patterns),
             daemon=True,
         )
+    _log.info("scan started: backend=%s det_size=%d threshold=%.2f folders=%s",
+              backend, det_size, threshold, folders)
     _scan_thread.start()
     return jsonify({"ok": True})
 
@@ -1029,6 +1182,122 @@ def api_db_repath():
     return jsonify({"ok": True, "count": count})
 
 
+@app.route("/api/db/export", methods=["POST"])
+def api_db_export():
+    """Back up DBs + thumbnails to a tar.gz, streaming SSE progress events."""
+    import tarfile as _tarfile
+
+    data = request.json or {}
+    dest_dir = Path(data.get("dest_dir", "")).expanduser()
+    if not dest_dir.is_dir():
+        return Response(
+            f"data: {json.dumps({'error': 'Destination directory not found'})}\n\n",
+            mimetype="text/event-stream",
+        )
+
+    entries = [
+        (DB_PATH,      DB_PATH.name),
+        (DB_PATH_OV,   DB_PATH_OV.name),
+        (THUMB_DIR,    THUMB_DIR.name),
+        (THUMB_DIR_OV, THUMB_DIR_OV.name),
+    ]
+    to_backup = [(src, arc) for src, arc in entries if src.exists()]
+    if not to_backup:
+        return Response(
+            f"data: {json.dumps({'error': 'No database files found'})}\n\n",
+            mimetype="text/event-stream",
+        )
+
+    # Count total files upfront so the UI can show X / total progress
+    total = sum(
+        sum(1 for f in src.rglob("*") if f.is_file()) if src.is_dir() else 1
+        for src, _ in to_backup
+    )
+
+    ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    filename = f"novoface-backup-{ts}.tar.gz"
+    dest = dest_dir / filename
+
+    def _generate():
+        done = 0
+        try:
+            with _tarfile.open(dest, "w:gz") as tar:
+                for src, arcname in to_backup:
+                    if src.is_file():
+                        tar.add(src, arcname=arcname, recursive=False)
+                        done += 1
+                        yield f"data: {json.dumps({'done': done, 'total': total})}\n\n"
+                    elif src.is_dir():
+                        # Add directory entry first, then each file individually
+                        tar.add(src, arcname=arcname, recursive=False)
+                        for fpath in sorted(src.rglob("*")):
+                            rel = fpath.relative_to(src.parent)
+                            tar.add(fpath, arcname=str(rel).replace("\\", "/"), recursive=False)
+                            if fpath.is_file():
+                                done += 1
+                                if done % 50 == 0 or done == total:
+                                    yield f"data: {json.dumps({'done': done, 'total': total})}\n\n"
+            _log.info("DB exported to %s/%s", dest_dir, filename)
+            yield f"data: {json.dumps({'ok': True, 'filename': filename, 'path': str(dest), 'done': total, 'total': total})}\n\n"
+        except Exception as e:
+            _log.exception("DB export failed")
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(stream_with_context(_generate()), mimetype="text/event-stream")
+
+
+@app.route("/api/db/import", methods=["POST"])
+def api_db_import():
+    """Restore a database from a backup file (.db or .tar.gz), streaming SSE progress."""
+    import shutil, tarfile as _tarfile
+
+    def _err(msg):
+        return Response(
+            f"data: {json.dumps({'error': msg})}\n\n",
+            mimetype="text/event-stream",
+        )
+
+    if _scan_thread and _scan_thread.is_alive():
+        return _err("Cannot import while a scan is running. Stop the scan first.")
+
+    data = request.json or {}
+    src = Path(data.get("file_path", "")).expanduser()
+    if not src.is_file():
+        return _err("File not found")
+
+    suffix = src.suffix.lower()
+    if suffix not in (".db", ".gz"):
+        return _err("Unsupported file type — expected .db or .tar.gz")
+
+    _ALLOWED = {"faces.db", "faces_ov.db", "thumbs", "thumbs_ov"}
+
+    def _generate():
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            if suffix == ".db":
+                yield f"data: {json.dumps({'done': 0, 'total': 1})}\n\n"
+                shutil.copy2(src, DB_PATH)
+                yield f"data: {json.dumps({'ok': True, 'done': 1, 'total': 1})}\n\n"
+            else:
+                with _tarfile.open(src, "r:gz") as tar:
+                    members = [m for m in tar.getmembers() if m.name.split("/")[0] in _ALLOWED]
+                    total = len(members)
+                    yield f"data: {json.dumps({'done': 0, 'total': total})}\n\n"
+                    for i, member in enumerate(members, 1):
+                        tar.extract(member, DATA_DIR, set_attrs=False)
+                        if i % 50 == 0 or i == total:
+                            yield f"data: {json.dumps({'done': i, 'total': total})}\n\n"
+                yield f"data: {json.dumps({'ok': True, 'done': total, 'total': total})}\n\n"
+            _log.info("DB imported from %s", src)
+        except Exception as e:
+            _log.exception("DB import failed")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return Response(stream_with_context(_generate()), mimetype="text/event-stream")
+
+
 @app.route("/api/db/location", methods=["GET"])
 def api_db_location_get():
     return jsonify({"path": str(DATA_DIR.resolve())})
@@ -1036,7 +1305,7 @@ def api_db_location_get():
 
 @app.route("/api/db/location", methods=["POST"])
 def api_db_location_move():
-    """Move the entire DATA_DIR to a new location and persist it in gedface_config.json.
+    """Move the entire DATA_DIR to a new location and persist it in novoface_config.json.
     Requires server restart to take effect."""
     if _scan_thread and _scan_thread.is_alive():
         return jsonify({"error": "Cannot move database while a scan is running"}), 400
@@ -1182,6 +1451,11 @@ def api_open_photo():
     ctypes.windll.user32.AllowSetForegroundWindow(-1)
     subprocess.Popen(f'start "" "{path}"', shell=True)
     return jsonify({"ok": True})
+
+
+@app.route("/api/version")
+def api_version():
+    return jsonify({"version": __version__})
 
 
 @app.route("/api/stats")
@@ -1434,7 +1708,7 @@ def api_set_cluster_group(cid):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="gedface — face recognition for genealogy photos"
+        description="novoface — face recognition for genealogy photos"
     )
     parser.add_argument("--port", type=int, default=8050)
     parser.add_argument("--no-browser", action="store_true")
@@ -1445,7 +1719,8 @@ def main():
     if not args.no_browser:
         Timer(2.0, lambda: webbrowser.open(f"http://localhost:{args.port}")).start()
 
-    print(f"gedface running at http://localhost:{args.port}")
+    _log.info("novoface running at http://localhost:%d", args.port)
+    print(f"novoface running at http://localhost:{args.port}")
     app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
 
 

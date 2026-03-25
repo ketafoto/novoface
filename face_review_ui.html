@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>gedface</title>
+<title>novoface</title>
 <style>
   /* ── Reset ── */
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -65,12 +65,56 @@
     color: #8888aa;
     flex-shrink: 0;
   }
+
+  /* ── About button ── */
+  .about-btn {
+    flex-shrink: 0;
+    margin-left: 16px;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 1px solid #2a2d3a;
+    background: transparent;
+    color: #6b6b8a;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .about-btn:hover { border-color: #a5f3c4; color: #a5f3c4; }
+
+  /* ── About modal ── */
+  .about-modal { width: 340px; text-align: center; }
+  .about-logo {
+    font-size: 26px; font-weight: 700; color: #a5f3c4;
+    letter-spacing: -0.5px; margin-bottom: 4px;
+  }
+  .about-version {
+    font-size: 13px; color: #6b6b8a; margin-bottom: 24px;
+  }
+  .about-divider {
+    height: 1px; background: #2a2d3a; margin: 0 0 20px;
+  }
+  .about-close {
+    margin-top: 20px;
+    padding: 7px 24px;
+    border: 1px solid #2a2d3a;
+    border-radius: 6px;
+    background: transparent;
+    color: #c0c0d0;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .about-close:hover { border-color: #a5f3c4; color: #a5f3c4; }
   .stats span { color: #a5f3c4; font-weight: 600; }
 
   /* ── Views ── */
   .view { display: none; }
-  #view-scanner.active { display: block; overflow-y: auto; height: calc(100vh - 56px); }
-  #view-review.active  { display: flex;  height: calc(100vh - 56px); position: relative; }
+  #view-scanner.active  { display: block; overflow-y: auto; height: calc(100vh - 56px); }
+  #view-review.active   { display: flex;  height: calc(100vh - 56px); position: relative; }
+  #view-settings.active { display: block; overflow-y: auto; height: calc(100vh - 56px); }
   #review-loading-overlay {
     display: none;
     position: absolute;
@@ -579,12 +623,17 @@
   .btn-merge { background: #3a1a1a; border-color: #6a2a2a; margin-left: auto; }
   .btn-danger { background: #3a1a1a; border-color: #8a2a2a; color: #f08080; }
   .btn-danger:hover { background: #5a1a1a; border-color: #cc4444; }
+  .btn-export { background: #1a3a1a; border-color: #2a9d4e; color: #a5f3c4; }
+  .btn-export:hover { background: #1e4a22; border-color: #3abf60; }
   .db-location-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .db-location-label { font-size: 12px; color: #6b6b8a; white-space: nowrap; }
   .db-location-path { font-size: 12px; color: #c0c0d0; flex: 1; word-break: break-all; }
   .db-tools-divider { border-top: 1px solid #2a2d3a; margin: 8px 0; }
   .db-tools-row { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
   .db-tools-hint { font-size: 12px; color: #6b6b8a; }
+  .db-tool-btn { min-width: 180px; }
+  .picker-file { color: #c0c0d0; }
+  .picker-file-selected { background: #1a2a3a !important; color: #a5f3c4; }
   .repath-desc { font-size: 13px; color: #9090aa; margin-bottom: 16px; line-height: 1.5; }
   .repath-field { margin-bottom: 12px; }
   .repath-field label { display: block; font-size: 12px; color: #9090aa; margin-bottom: 4px; }
@@ -790,18 +839,51 @@
     justify-content: flex-end;
     gap: 8px;
   }
+
+  /* ── Toggle switch ── */
+  .toggle-switch { position: relative; display: inline-block; width: 38px; height: 22px; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: #2a2d3a; border-radius: 22px;
+    transition: background 0.2s;
+  }
+  .toggle-slider:before {
+    content: ""; position: absolute;
+    width: 16px; height: 16px; left: 3px; bottom: 3px;
+    background: #6b6b8a; border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  .toggle-switch input:checked + .toggle-slider { background: #1a3a2a; }
+  .toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(16px); background: #a5f3c4;
+  }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>gedface</h1>
+  <h1>novoface <span id="app-version" style="font-size:11px;font-weight:400;color:#4a4a6a;letter-spacing:0.03em;"></span></h1>
   <nav class="tabs">
     <button class="tab active" data-tab="scanner" onclick="switchTab('scanner')">Scanner</button>
     <button class="tab" data-tab="review" onclick="switchTab('review')">Review</button>
+    <button class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
   </nav>
   <div class="stats" id="stats"></div>
+  <button class="about-btn" onclick="showAboutModal()" title="About novoface">?</button>
 </header>
+
+<!-- ── About Modal ── -->
+<div id="about-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeAboutModal()">
+  <div class="modal about-modal">
+    <div class="about-logo">novoface</div>
+    <div class="about-version" id="about-version-text">v…</div>
+    <div class="about-divider"></div>
+    <!-- future: company name, GitHub link, etc. -->
+    <button class="about-close" onclick="closeAboutModal()">Close</button>
+  </div>
+</div>
 
 <!-- ── Scanner View ── -->
 <div id="view-scanner" class="view active">
@@ -920,9 +1002,48 @@
 
       <div class="scan-btn-row">
         <button id="scan-btn" class="scan-btn start" onclick="startScan()">Start Scan</button>
-        <button id="reset-btn" class="scan-btn reset" onclick="resetDatabase()">Reset DB</button>
       </div>
       <div id="scan-message"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Settings View ── -->
+<div id="view-settings" class="view">
+  <div class="scanner-content">
+
+    <div class="card">
+      <div class="card-title">Logging</div>
+      <div class="settings-row">
+        <div class="setting">
+          <label>Enable logging</label>
+          <label class="toggle-switch">
+            <input type="checkbox" id="log-enabled" onchange="saveLogSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="setting">
+          <label>Max log size (MB)
+            <span class="tip-icon">?<span class="tip">
+              The log file rotates automatically when it reaches this size.
+              Two backup copies are kept (novoface.log.1, novoface.log.2).
+            </span></span>
+          </label>
+          <input type="number" id="log-max-mb" value="5" min="1" max="500" step="1"
+                 style="width:70px" onchange="saveLogSettings()">
+        </div>
+      </div>
+      <div class="db-tools-divider"></div>
+      <div class="db-location-row" style="margin-bottom:0">
+        <span class="db-location-label">Log file</span>
+        <span class="db-location-path" id="log-file-path">…</span>
+      </div>
+      <div class="db-tools-divider"></div>
+      <div class="db-tools-row">
+        <button class="btn" onclick="openLogFile()">Open Log File</button>
+        <button class="btn" onclick="clearLogFile()">Clear Log</button>
+        <span class="db-tools-hint" id="log-action-status"></span>
+      </div>
     </div>
 
     <div class="card">
@@ -934,14 +1055,29 @@
       </div>
       <div class="db-tools-divider"></div>
       <div class="db-tools-row">
-        <button class="btn" onclick="showRepathModal()">Relocate Photos…</button>
+        <button class="btn db-tool-btn" onclick="showRepathModal()">Relocate Photos…</button>
         <span class="db-tools-hint">Update photo paths after moving your archive to a new location.</span>
       </div>
       <div class="db-tools-row">
-        <button class="btn" onclick="showRemovePathModal()">Remove Photos by Path…</button>
+        <button class="btn db-tool-btn" onclick="showRemovePathModal()">Remove Photos by Path…</button>
         <span class="db-tools-hint">Delete all records for a folder permanently from the database.</span>
       </div>
+      <div class="db-tools-divider"></div>
+      <div class="db-tools-row">
+        <button class="btn db-tool-btn" onclick="openImportPicker()">Import Database…</button>
+        <span class="db-tools-hint">Restore from a .tar.gz backup (or legacy .db file).</span>
+      </div>
+      <div class="db-tools-divider"></div>
+      <div class="db-tools-row">
+        <button class="btn btn-export db-tool-btn" onclick="openExportPicker()">Export Database…</button>
+        <span class="db-tools-hint">Save database + thumbnails to a folder as a .tar.gz backup.</span>
+      </div>
+      <div class="db-tools-row">
+        <button class="btn btn-danger db-tool-btn" onclick="resetDatabase()">Reset Database…</button>
+        <span class="db-tools-hint">Wipe all scan data — photos, faces, clusters, thumbnails.</span>
+      </div>
     </div>
+
   </div>
 </div>
 
@@ -978,7 +1114,7 @@
     </div>
     <div class="repath-field">
       <label>New location (absolute path)</label>
-      <input type="text" id="move-db-new" placeholder="e.g. D:\gedface_data" autocomplete="off">
+      <input type="text" id="move-db-new" placeholder="e.g. D:\novoface_data" autocomplete="off">
     </div>
     <div id="move-db-status" class="repath-preview"></div>
     <div class="repath-btn-row">
@@ -1050,6 +1186,9 @@ function switchTab(tab) {
   }
   if (tab === 'scanner') {
     loadFolders();
+  }
+  if (tab === 'settings') {
+    loadLogSettings();
     loadDbLocation();
   }
 }
@@ -1182,36 +1321,169 @@ async function removeFolder(id) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Scanner — folder picker
+// Scanner — folder picker (generic, reused for scan folders and DB export)
 // ═══════════════════════════════════════════════════════════════════════════
 
 let pickerCurrentPath = '';
+let pickerSelectedFile = null;  // used in file-pick mode
+let pickerFileFilter = null;    // array of extensions e.g. ['.db','.gz'], or null for folder mode
+let _pickerCallback = null;
+let pickerKeepOpen = false;     // when true, selectPickerFolder doesn't close the modal
 
-function openFolderPicker() {
+function openFolderPickerWith(title, selectLabel, callback, fileFilter = null) {
+  pickerFileFilter = fileFilter;
+  pickerSelectedFile = null;
+  pickerKeepOpen = false;
+  _pickerCallback = callback;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
     <div class="modal folder-picker">
-      <h3>Select Folder</h3>
+      <h3>${esc(title)}</h3>
       <div class="picker-path" id="picker-path"></div>
       <div class="picker-list" id="picker-list">
         <div class="picker-loading">Loading...</div>
       </div>
       <div class="picker-actions">
         <button class="btn" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-        <button class="btn btn-save" id="picker-select" onclick="selectPickerFolder()" disabled>Select this folder</button>
+        <button class="btn btn-save" id="picker-select" onclick="selectPickerFolder()" disabled>${esc(selectLabel)}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   navigatePicker('');
 }
 
+function openFolderPicker() {
+  openFolderPickerWith('Select Folder', 'Select this folder', async (path) => {
+    const r = await fetch('/api/scan/folders', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({folder_path: path}),
+    });
+    const data = await r.json();
+    if (!r.ok) { showToast(data.error || 'Failed to add folder'); return; }
+    await loadFolders();
+    showToast('Folder added');
+  });
+}
+
+// Shared helper: replace picker content with a progress bar and stream SSE from fetchFn.
+// fetchFn(chosenPath) → fetch() Promise with SSE response body.
+// successHTML(evt) → HTML string shown inside the modal on success (with a Close button added).
+// On error: toast shown, modal closed automatically.
+async function _runPickerSSE(chosenPath, fetchFn, successHTML) {
+  const modal = document.querySelector('.modal-overlay .folder-picker');
+  const FILL_ID  = 'picker-op-fill';
+  const LABEL_ID = 'picker-op-label';
+  if (modal) {
+    modal.querySelector('.picker-path').textContent = chosenPath;
+    modal.querySelector('.picker-list').innerHTML = `
+      <div style="padding:24px 8px">
+        <div class="progress-bar">
+          <div class="progress-fill" id="${FILL_ID}" style="width:0;transition:width 0.3s ease"></div>
+        </div>
+        <div id="${LABEL_ID}" style="color:#aaa;font-size:13px;text-align:center;margin-top:6px">Preparing…</div>
+      </div>`;
+    modal.querySelector('.picker-actions').innerHTML = '';
+  }
+
+  let reader;
+  let succeeded = false;
+  try {
+    const r = await fetchFn(chosenPath);
+    reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let finished = false;
+
+    while (!finished) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+        if (evt.error) throw new Error(evt.error);
+        const fill  = document.getElementById(FILL_ID);
+        const label = document.getElementById(LABEL_ID);
+        if (fill && label && evt.total > 0) {
+          const pct = Math.round((evt.done / evt.total) * 100);
+          if (pct >= 100 && !evt.ok) {
+            // Files written; archive still being finalized (gzip flush)
+            fill.className = 'progress-fill indeterminate';
+            fill.style.width = '';
+            label.textContent = 'Finalizing archive…';
+          } else {
+            fill.style.width = pct + '%';
+            label.textContent = evt.done + ' / ' + evt.total + ' files (' + pct + '%)';
+          }
+        }
+        if (evt.ok) {
+          // Show success state inside the modal; user closes it manually
+          succeeded = true;
+          finished = true;
+          const listEl = modal?.querySelector('.picker-list');
+          const actionsEl = modal?.querySelector('.picker-actions');
+          if (listEl) listEl.innerHTML = `<div style="padding:24px 8px;text-align:center">${successHTML(evt)}</div>`;
+          if (actionsEl) actionsEl.innerHTML =
+            `<button class="btn btn-save" onclick="this.closest('.modal-overlay').remove()">Close</button>`;
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    showToast(e.message || 'Operation failed');
+  } finally {
+    reader?.cancel().catch(() => {});
+    if (!succeeded) document.querySelector('.modal-overlay')?.remove();
+    pickerKeepOpen = false;
+  }
+}
+
+function openExportPicker() {
+  pickerKeepOpen = true;
+  openFolderPickerWith('Export Database — Select destination folder', 'Export here', (path) => {
+    _runPickerSSE(
+      path,
+      (p) => fetch('/api/db/export', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dest_dir: p}),
+      }),
+      (evt) => `<div style="color:#a5f3c4;font-size:20px;margin-bottom:12px">&#10003; Exported!</div>
+                <div style="color:#aaa;font-size:12px;word-break:break-all">${esc(evt.path || evt.filename)}</div>`,
+    );
+  });
+}
+
+function openImportPicker() {
+  pickerKeepOpen = true;
+  openFolderPickerWith('Import Database — Select backup file', 'Restore this backup', (filePath) => {
+    _runPickerSSE(
+      filePath,
+      (p) => fetch('/api/db/import', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({file_path: p}),
+      }),
+      (_evt) => `<div style="color:#a5f3c4;font-size:20px;margin-bottom:12px">&#10003; Imported!</div>
+                 <div style="color:#aaa;font-size:13px">Reload the page to apply the restored data.</div>`,
+    );
+  }, ['.db', '.gz']);
+}
+
 async function navigatePicker(path) {
+  pickerSelectedFile = null;
   const listEl = document.getElementById('picker-list');
   listEl.innerHTML = '<div class="picker-loading">Loading...</div>';
 
-  const r = await fetch('/api/browse?path=' + encodeURIComponent(path));
+  let url = '/api/browse?path=' + encodeURIComponent(path);
+  if (pickerFileFilter) url += '&file_exts=' + encodeURIComponent(pickerFileFilter.join(','));
+  const r = await fetch(url);
   const data = await r.json();
   if (!r.ok) {
     listEl.innerHTML = `<div class="picker-empty">${esc(data.error || 'Cannot open')}</div>`;
@@ -1220,7 +1492,9 @@ async function navigatePicker(path) {
 
   pickerCurrentPath = data.current;
   document.getElementById('picker-path').textContent = data.current || 'This PC';
-  document.getElementById('picker-select').disabled = !data.current;
+  // In folder mode: enable Select when inside a directory.
+  // In file mode: only enable when a file is clicked — disable for now.
+  document.getElementById('picker-select').disabled = pickerFileFilter ? true : !data.current;
 
   let html = '';
   if (data.parent !== undefined && data.parent !== null) {
@@ -1236,27 +1510,33 @@ async function navigatePicker(path) {
       <span class="folder-icon">\u{1F4C1}</span> ${esc(d.name)}</div>`;
   }
 
+  for (const f of (data.files || [])) {
+    html += `<div class="picker-item picker-file"
+      onclick="selectPickerFile('${escJs(f.path)}')" title="${esc(f.path)}">
+      <span class="folder-icon">&#128196;</span> ${esc(f.name)}</div>`;
+  }
+
   if (!html) {
-    html = '<div class="picker-empty">No subfolders</div>';
+    html = `<div class="picker-empty">${pickerFileFilter ? 'No matching files' : 'No subfolders'}</div>`;
   }
   listEl.innerHTML = html;
 }
 
-async function selectPickerFolder() {
-  if (!pickerCurrentPath) return;
-  const r = await fetch('/api/scan/folders', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({folder_path: pickerCurrentPath}),
+function selectPickerFile(filePath) {
+  pickerSelectedFile = filePath;
+  document.querySelectorAll('.picker-file').forEach(el => {
+    el.classList.toggle('picker-file-selected', el.title === filePath);
   });
-  const data = await r.json();
-  document.querySelector('.modal-overlay')?.remove();
-  if (!r.ok) {
-    showToast(data.error || 'Failed to add folder');
-    return;
+  document.getElementById('picker-select').disabled = false;
+}
+
+async function selectPickerFolder() {
+  const chosen = pickerFileFilter ? pickerSelectedFile : pickerCurrentPath;
+  if (!chosen || !_pickerCallback) return;
+  if (!pickerKeepOpen) {
+    document.querySelector('.modal-overlay')?.remove();
   }
-  await loadFolders();
-  showToast('Folder added');
+  await _pickerCallback(chosen);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1682,7 +1962,6 @@ async function updateScanBtnState() {
 function updateScanUI(s) {
   const btn = document.getElementById('scan-btn');
   btn.classList.remove('busy');  // clear any in-progress stop animation
-  const resetBtn = document.getElementById('reset-btn');
   const progress = document.getElementById('progress-section');
   const fill = document.getElementById('progress-fill');
   const statsEl = document.getElementById('progress-stats');
@@ -1691,7 +1970,6 @@ function updateScanUI(s) {
 
   const timingEl = document.getElementById('progress-timing');
   const scanning = ['loading_model', 'scanning', 'clustering'].includes(s.status);
-  resetBtn.disabled = scanning;
   _lastScanStatus = s.status;
 
   if (s.status === 'idle') {
@@ -2351,7 +2629,6 @@ function renderSidebar() {
     + '<span class="sidebar-actions">'
     + ungroupedStat
     + (groups.length > 0 ? '<span class="sidebar-action toggle-tree" onclick="toggleAllGroups()" title="Collapse/expand all groups">&#x229e;</span>' : '')
-    + ' <span class="sidebar-action" onclick="promptNewGroup()" title="Group clusters together and give names like &#34;Igor Family&#34;, &#34;Alona Friends&#34;">+ Group</span>'
     + '</span></div>'
     + '<div class="sidebar-search-row"><input id="sidebar-search" class="sidebar-search-inp"'
     + ` type="text" placeholder="Search clusters\u2026" autocomplete="off" value="${esc(_sidebarSearch)}"></div>`;
@@ -2934,10 +3211,70 @@ function initPathScroll() {
   }, true);
 }
 
+// ── Settings tab — Logging ─────────────────────────────────────────────────
+
+async function loadLogSettings() {
+  const r = await fetch('/api/log/settings');
+  const d = await r.json();
+  document.getElementById('log-enabled').checked = d.enabled;
+  document.getElementById('log-max-mb').value    = d.max_mb;
+  const pathEl = document.getElementById('log-file-path');
+  if (pathEl) pathEl.textContent = d.path || '—';
+}
+
+async function saveLogSettings() {
+  const enabled = document.getElementById('log-enabled').checked;
+  const maxMb   = parseInt(document.getElementById('log-max-mb').value, 10) || 5;
+  await fetch('/api/log/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled, max_mb: maxMb}),
+  });
+}
+
+async function openLogFile() {
+  const r = await fetch('/api/log/open', {method: 'POST'});
+  if (!r.ok) {
+    const d = await r.json();
+    showToast(d.error || 'Could not open log file');
+  }
+}
+
+async function clearLogFile() {
+  const r = await fetch('/api/log/clear', {method: 'POST'});
+  const d = await r.json();
+  const statusEl = document.getElementById('log-action-status');
+  if (r.ok) {
+    if (statusEl) { statusEl.textContent = 'Log cleared.'; setTimeout(() => statusEl.textContent = '', 3000); }
+  } else {
+    showToast(d.error || 'Could not clear log');
+  }
+}
+
+function showAboutModal() {
+  const modal = document.getElementById('about-modal');
+  const vEl = document.getElementById('about-version-text');
+  // Sync version from the header badge if already loaded
+  const badge = document.getElementById('app-version');
+  if (badge && badge.textContent) vEl.textContent = badge.textContent;
+  modal.style.display = 'flex';
+}
+
+function closeAboutModal() {
+  document.getElementById('about-modal').style.display = 'none';
+}
+
 async function init() {
+  fetch('/api/version').then(r => r.json()).then(d => {
+    const ver = 'v' + d.version;
+    const el = document.getElementById('app-version');
+    if (el) el.textContent = ver;
+    const aboutVer = document.getElementById('about-version-text');
+    if (aboutVer) aboutVer.textContent = ver;
+  }).catch(() => {});
   await loadBackend();
   await loadStats();
-  await Promise.all([loadFolders(), loadDbLocation()]);
+  await Promise.all([loadFolders(), loadDbLocation(), loadLogSettings()]);
   initPathScroll();
 
   const scanR = await fetch('/api/scan/status');
