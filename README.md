@@ -1,10 +1,22 @@
 # novoface — Face recognition tool for genealogy photo archives
 
-*Last updated: 2026-03-24*
+*Last updated: 2026-03-27*
 
 Scans a photo archive, detects and clusters faces, then provides a local web UI
 to review clusters, name people, and quickly copy file paths for use with the
 novotree app.
+
+[![GitHub release](https://img.shields.io/github/v/release/ketafoto/novoface)](https://github.com/ketafoto/novoface/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+---
+
+## Support
+
+If you find novoface useful, please consider supporting its development:
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%99%A5-db61a2?logo=github)](https://github.com/sponsors/ketafoto)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/ketafoto)
 
 No files are copied or moved — the tool generates small thumbnails for browsing
 and references originals by path only. Scanning is fully resumable: you can stop
@@ -22,7 +34,7 @@ tab, which wipes only the scan data without touching the app).
 
 ## Windows — Installer
 
-1. Download `novoface-setup.exe` from the releases page and run it.
+1. Download `novoface-setup.exe` from the [releases page](https://github.com/ketafoto/novoface/releases) and run it.
 2. Follow the installer wizard (no administrator rights required).
    - A **desktop shortcut** is created by default (uncheck if not wanted).
    - A **Start Menu entry** is always created.
@@ -211,3 +223,9 @@ pyinstaller novoface.spec   # → dist/novoface/
 The first PyInstaller build always requires a test run on a clean machine — native
 DLLs from insightface and onnxruntime are collected automatically by the spec but
 should be verified.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) or the [GitHub Releases page](https://github.com/ketafoto/novoface/releases) for the full version history.
