@@ -1,6 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-D184VFJ4WM"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-D184VFJ4WM');
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>novoface</title>
@@ -67,6 +76,19 @@
   }
 
   /* ── About button ── */
+  .donate-btn {
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 12px;
+    border-radius: 6px;
+    border: 1px solid #db61a2;
+    background: transparent;
+    color: #db61a2;
+    font-size: 14px; font-family: inherit; font-weight: 500;
+    text-decoration: none; cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .donate-btn:hover { border-color: #f08ac0; color: #f08ac0; }
   .about-btn {
     flex-shrink: 0;
     margin-left: 16px;
@@ -870,6 +892,7 @@
     <button class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
   </nav>
   <div class="stats" id="stats"></div>
+  <button class="donate-btn" onclick="showDonateModal()">Donate ♥</button>
   <button class="about-btn" onclick="showAboutModal()" title="About novoface">?</button>
 </header>
 
@@ -880,8 +903,29 @@
     <div class="about-logo">novoface</div>
     <div class="about-version" id="about-version-text">v…</div>
     <div class="about-divider"></div>
-    <!-- future: company name, GitHub link, etc. -->
+    <div style="font-size:12px;color:#6b7280;margin-bottom:16px">
+      <a href="mailto:164931344+ketafoto@users.noreply.github.com"
+         style="color:#6b7280;text-decoration:none"
+         onmouseover="this.style.color='#a5c3f3'" onmouseout="this.style.color='#6b7280'">164931344+ketafoto@users.noreply.github.com</a>
+    </div>
+    <button class="donate-btn" style="margin:0 auto 16px" onclick="closeAboutModal();showDonateModal()">Donate ♥</button>
     <button class="about-close" onclick="closeAboutModal()">Close</button>
+  </div>
+</div>
+
+<!-- ── Donate Modal ── -->
+<div id="donate-modal" class="modal-overlay" style="display:none"
+     onclick="if(event.target===this)closeDonateModal()">
+  <div class="modal" style="width:300px;text-align:center">
+    <h3 style="margin:0 0 6px;color:#e8e8f0">Support novoface</h3>
+    <p style="font-size:13px;color:#6b7280;margin:0 0 20px">If you find novoface useful,<br>consider supporting its development.</p>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;margin-bottom:20px">
+      <a href="https://github.com/sponsors/ketafoto" target="_blank" class="donate-btn">GitHub Sponsors ♥</a>
+      <a href="https://ko-fi.com/ketafoto" target="_blank" style="display:inline-flex;text-decoration:none">
+        <img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy Me a Coffee at ko-fi.com" height="36" style="border:0;border-radius:6px">
+      </a>
+    </div>
+    <button class="about-close" onclick="closeDonateModal()">Close</button>
   </div>
 </div>
 
@@ -1079,6 +1123,16 @@
     </div>
 
   </div>
+
+  <div style="text-align:center;padding:18px 0 8px;color:#6b7280;font-size:13px;line-height:1.6">
+    Find novoface useful?<br>
+    <a href="https://github.com/sponsors/ketafoto" target="_blank"
+       style="color:#a5c3f3;text-decoration:underline">♥ Sponsor on GitHub</a>
+    &nbsp;·&nbsp;
+    <a href="https://novospace.cz/novoface" target="_blank"
+       style="color:#a5c3f3;text-decoration:underline">novospace.cz</a>
+  </div>
+
 </div>
 
 <!-- ── Repath Modal ── -->
@@ -2029,9 +2083,15 @@ function updateScanUI(s) {
     statsEl.textContent = '';
     timingEl.textContent = s.elapsed_seconds ? `Total time: ${formatDuration(s.elapsed_seconds)}` : '';
     fileEl.textContent = '';
+    const scansDone = (parseInt(localStorage.getItem('nf_scans_done') || '0') + 1);
+    localStorage.setItem('nf_scans_done', scansDone);
+    const donateHtml = (scansDone % 3 === 0)
+      ? `<br><button class="donate-btn" onclick="showDonateModal()" ` +
+        `style="margin:10px auto 0;font-size:12px;height:26px;padding:0 10px">Donate ♥</button>`
+      : '';
     msgEl.innerHTML =
       `<div class="scan-done">${esc(s.message)}<br>` +
-      `<a onclick="switchTab('review')">Go to Review &rarr;</a></div>`;
+      `<a onclick="switchTab('review')">Go to Review &rarr;</a>${donateHtml}</div>`;
     btn.className = 'scan-btn start';
     btn.onclick = startScan;
     btn.disabled = folders.length === 0;
@@ -3262,6 +3322,13 @@ function showAboutModal() {
 
 function closeAboutModal() {
   document.getElementById('about-modal').style.display = 'none';
+}
+
+function showDonateModal() {
+  document.getElementById('donate-modal').style.display = 'flex';
+}
+function closeDonateModal() {
+  document.getElementById('donate-modal').style.display = 'none';
 }
 
 async function init() {
