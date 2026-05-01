@@ -18,6 +18,11 @@ If you find novoface useful, please consider supporting its development:
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%99%A5-db61a2?logo=github)](https://github.com/sponsors/ketafoto)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/ketafoto)
 
+*NovoFace itself stays fully offline — nothing leaves your machine through the app.
+The badges above link to GitHub Sponsors and Ko-fi; clicking them opens those
+services in your browser, where their respective privacy policies apply to the
+donation transaction.*
+
 No files are copied or moved — the tool generates small thumbnails for browsing
 and references originals by path only. Scanning is fully resumable: you can stop
 at any time and pick up exactly where you left off, even across reboots. If photos
