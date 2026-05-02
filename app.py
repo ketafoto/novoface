@@ -741,6 +741,18 @@ def index():
     return resp
 
 
+@app.route("/favicon.ico")
+def favicon():
+    # Bundled at the package root by PyInstaller; in dev it lives in installer/.
+    base = _base_dir()
+    ico = base / "novoface.ico"
+    if not ico.exists():
+        ico = base / "installer" / "novoface.ico"
+    resp = send_file(ico, mimetype="image/x-icon")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @app.route("/thumbs/<path:filename>")
 def serve_thumb(filename):
     thumb_dir = THUMB_DIR if get_backend() == "cpu" else THUMB_DIR_OV

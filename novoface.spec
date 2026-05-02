@@ -48,11 +48,12 @@ a = Analysis(
     binaries=ins_binaries + ort_binaries + wv_binaries + ov_binaries,
     datas=[
         # App resources
-        ("face_review_ui.html", "."),
-        ("face_scan.py",        "."),
-        ("openvino_pipeline.py",".",),
-        ("app.py",              "."),
-        ("version.py",          "."),
+        ("face_review_ui.html",      "."),
+        ("face_scan.py",             "."),
+        ("openvino_pipeline.py",     ".",),
+        ("app.py",                   "."),
+        ("version.py",               "."),
+        ("installer/novoface.ico",   "."),
     ] + ins_datas + ort_datas + wv_datas + ov_datas,
     hiddenimports=[
         # pywebview Windows backend
