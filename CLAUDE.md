@@ -1,6 +1,6 @@
 # novoface — Project Context for Claude Code
 
-*Last updated: 2026-03-24*
+*Last updated: 2026-05-02*
 
 > **For Claude:** Keep this file up to date. After every change that affects
 > architecture, data flow, DB schema, API contracts, or key design decisions,
@@ -135,7 +135,9 @@ Committed immediately. Source cluster is kept (archived via `merged_into`) for h
 
 ## UI (face_review_ui.html) — Tabs
 
-Three tabs: **Scanner** (folders, scan settings, progress), **Review** (cluster browsing/naming/merging), **Settings** (logging config, database tools).
+Three tabs: **Scanner** (folders, scan settings, progress), **Review** (cluster browsing/naming/merging), **Settings** (theme toggle, logging config, database tools).
+
+**Theming:** Single source of truth per theme — every theme-varying color is a CSS custom property defined exactly once in `:root` (dark) and once in `[data-theme="light"]` (light), at the top of `<style>`. All CSS rules reference these via `var(--…)` only; no hardcoded theme colors live outside the two variable blocks. To change a color in either theme, edit one line in one block. The Settings → Appearance card has a Light/Dark segmented toggle; the choice is persisted in `localStorage["novoface_theme"]` and applied via an inline `<head>` script before first paint to avoid flash.
 
 ### Key JS Functions
 
