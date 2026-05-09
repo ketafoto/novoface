@@ -389,6 +389,21 @@
     transition: border-color 0.15s, color 0.15s;
   }
   .about-close:hover { border-color: var(--accent); color: var(--accent); }
+  .about-x {
+    position: absolute;
+    top: 8px; right: 10px;
+    width: 26px; height: 26px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .about-x:hover { color: var(--accent); background: var(--bg-hover); }
   .stats span { color: var(--accent); font-weight: 600; }
 
   /* ── Views ── */
@@ -1216,17 +1231,27 @@
 <!-- ── About Modal ── -->
 <div id="about-modal" class="modal-overlay" style="display:none"
      onclick="if(event.target===this)closeAboutModal()">
-  <div class="modal about-modal">
+  <div class="modal about-modal" style="position:relative">
+    <button type="button" class="about-x" title="Close" aria-label="Close"
+            onclick="closeAboutModal()">&times;</button>
     <div class="about-logo">novoface</div>
     <div class="about-version" id="about-version-text">v…</div>
     <div class="about-divider"></div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;display:flex;align-items:center;gap:6px;justify-content:center">
       <a href="mailto:support@contact.novotree.cz"
-         style="color:#6b7280;text-decoration:none"
+         style="color:#6b7280;text-decoration:none;user-select:text;-webkit-user-select:text"
          onmouseover="this.style.color='#a5c3f3'" onmouseout="this.style.color='#6b7280'">support@contact.novotree.cz</a>
+      <button type="button" title="Copy email to clipboard" aria-label="Copy email to clipboard"
+              onclick="copyEmail('support@contact.novotree.cz')"
+              style="background:transparent;border:none;cursor:pointer;color:#6b7280;padding:2px;display:inline-flex;align-items:center;line-height:0"
+              onmouseover="this.style.color='#a5c3f3'" onmouseout="this.style.color='#6b7280'">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
     </div>
-    <button class="donate-btn" style="margin:0 auto 16px" onclick="closeAboutModal();showDonateModal()">Donate ♥</button>
-    <button class="about-close" onclick="closeAboutModal()">Close</button>
+    <button class="donate-btn" style="margin:0 auto" onclick="closeAboutModal();showDonateModal()">Donate ♥</button>
   </div>
 </div>
 
@@ -3470,6 +3495,12 @@ async function saveCluster() {
 function copyPath(filePath) {
   navigator.clipboard.writeText(filePath).then(() => {
     showToast('Path copied to clipboard: ' + filePath);
+  });
+}
+
+function copyEmail(email) {
+  navigator.clipboard.writeText(email).then(() => {
+    showToast('Email copied to clipboard: ' + email);
   });
 }
 
