@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.1] — 2026-05-09
+
+### Added
+- Light / dark theme toggle in Settings → Appearance, persisted across sessions and applied before first paint to avoid flash
+- Favicon for the browser UI
+- Copy-to-clipboard button next to the support email in the About dialog; the email is also selectable for Ctrl+C
+- Privacy disclosure on the Donate dialog noting that GitHub Sponsors and Ko-fi handle donations under their own privacy policies
+
+### Changed
+- About dialog: replaced the bottom Close button with an "X" in the top-right corner
+- Updated the support contact email to a working address
+
+### Removed
+- Google Analytics tracking — unnecessary for a downloadable desktop application
+
+---
+
 ## [1.0.0] — 2026-03-27
 
 ### Added
@@ -49,4 +66,5 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[1.0.1]: https://github.com/ketafoto/novoface/releases/tag/v1.0.1
 [1.0.0]: https://github.com/ketafoto/novoface/releases/tag/v1.0.0
