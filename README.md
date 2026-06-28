@@ -68,9 +68,30 @@ shuts down automatically.
 
 ## Development setup
 
-```bash
-pip install -r requirements.txt
+Create a virtual environment and install the pinned dependencies. The venv is
+**not** committed to the repo (it is git-ignored); `requirements-lock.txt` pins
+exact versions so the environment is fully reproducible.
+
+**Windows (PowerShell):**
+
+```powershell
+# 1. Create the venv (Python 3.11 recommended)
+python -m venv venv-win
+
+# 2. Activate it
+venv-win\Scripts\Activate.ps1
+# (cmd.exe instead of PowerShell: venv-win\Scripts\activate.bat)
+
+# 3. Install pinned dependencies (includes OpenVINO for the Intel GPU backend)
+python -m pip install --upgrade pip
+pip install -r requirements-lock.txt
 ```
+
+To deactivate the environment at any time, run `deactivate`.
+
+> `requirements.txt` lists the top-level dependencies (unpinned, for reference);
+> `requirements-lock.txt` is the full pinned set produced by `pip freeze` and is
+> what you should install from for a reproducible environment.
 
 ### Run (development)
 
@@ -156,13 +177,11 @@ On CPU, scanning can be slow (~10 s/image with `buffalo_l`). For ~100K photos:
   installer, GPU support is set up automatically during first launch (see above) —
   no manual steps needed.
 
-  For the development workflow, OpenVINO's dependencies can downgrade numpy/networkx
-  and may conflict with other packages, so use a **separate virtual environment**:
+  For the development workflow, `openvino` is already part of the pinned
+  dependencies (`requirements-lock.txt`), so the standard venv from
+  [Development setup](#development-setup) is GPU-ready — no separate environment
+  is needed. You only need to download the face models once:
   ```bash
-  python -m venv .venv-openvino
-  .venv-openvino\Scripts\activate   # Windows
-  pip install -r requirements.txt
-  pip install openvino
   python scripts/download_openvino_models.py
   python app.py
   ```
@@ -170,6 +189,10 @@ On CPU, scanning can be slow (~10 s/image with `buffalo_l`). For ~100K photos:
   **Backend** to **GPU Iris Xe (OpenVINO)**. Uses a separate DB (`faces_ov.db`)
   and thumbs (`thumbs_ov/`). Switch back to **CPU (InsightFace)** to restore and
   resume your normal scan.
+
+  > Requires an Intel Iris Xe / Arc GPU **and** an up-to-date Intel graphics
+  > driver. On machines without a compatible Intel GPU the `openvino` package
+  > still installs fine but falls back to CPU.
 
 - **Faster CPU model** — Use `--model buffalo_s` for quicker CPU scans (some accuracy
   tradeoff, CLI only).

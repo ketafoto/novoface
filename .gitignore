@@ -3,6 +3,10 @@ __pycache__/
 *.pyo
 .env
 venv/
+venv-win/
+venv-linux/
+.venv/
+.venv-openvino/
 *.db
 face_data/
 .claude/settings.*
