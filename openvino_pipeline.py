@@ -12,10 +12,13 @@ face_data/openvino_models/ (see _models_dir()).
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 import cv2
 import numpy as np
@@ -106,7 +109,7 @@ class OpenVINOPipeline:
                     self.rec_out_key = out
                     break
             except Exception:
-                pass
+                _log.debug("Probing recognition output key failed", exc_info=True)
 
     def get_faces(self, img_bgr: np.ndarray):
         """Return list of (bbox_xyxy, embedding_512), L2-normalized."""
@@ -305,6 +308,7 @@ def process_photo(
     try:
         faces = pipeline.get_faces(img)
     except Exception:
+        _log.exception("OpenVINO get_faces failed for %s", file_path)
         faces = []
 
     cursor = conn.execute(

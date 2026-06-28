@@ -15,12 +15,17 @@
 #define MyAppURL        "https://novospace.cz/novoface"
 #define MyAppExeName    "novoface.exe"
 #define MyBuildDir      "..\dist\novoface"
+; App GUID (no braces) — single source of truth, used for AppId and the
+; auto-uninstall registry lookup. Braces are added at each use site because
+; the [Setup] AppId needs a doubled "{{" to escape the constant syntax, while
+; the [Code] string needs a plain single "{".
+#define MyAppGuid       "A3F2C1D0-7E4B-4A9F-8C2D-1B3E5F6A7D8C"
 
 [Setup]
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppId={{A3F2C1D0-7E4B-4A9F-8C2D-1B3E5F6A7D8C}
+AppId={{{#MyAppGuid}}
 
 ; Install to %LocalAppData%\Programs\novoface by default (no admin rights needed)
 DefaultDirName={localappdata}\Programs\{#MyAppName}
@@ -41,6 +46,17 @@ LZMAUseSeparateProcess=yes
 WizardStyle=modern
 SetupIconFile=novoface.ico
 
+; Always write a setup log to %TEMP%\Setup Log YYYY-MM-DD #NNN.txt so install
+; problems (e.g. the auto-uninstall step) can be diagnosed after the fact.
+SetupLogging=yes
+
+; RedirectionGuard hooks every file operation in the setup process. On this
+; Windows 11 build that hooking inflates each DeleteFile/copy from ~3 ms to
+; ~150 ms (a 50x slowdown), turning the previous-version cleanup into a
+; multi-minute hang. We do not need the mitigation (a per-user install writing
+; to %LOCALAPPDATA%), so disable it. This is THE fix for the slow install/delete.
+RedirectionGuard=no
+
 ; Uninstaller
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -54,10 +70,18 @@ Name: "desktopicon"; \
   GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-; All PyInstaller output — recurse the entire dist\novoface\ folder
+; The manifest is extracted to a temp dir during [Code] (ssInstall) so the
+; skip-unchanged check below can read new-build file sizes before the main copy.
+Source: "{#MyBuildDir}\_filemanifest.txt"; Flags: dontcopy
+
+; All PyInstaller output — recurse the entire dist\novoface\ folder.
+; Check: ShouldCopyFile skips overwriting files already byte-identical on disk
+; (same relative path + same size in the manifest), so unchanged large native
+; DLLs are NOT rewritten — avoiding endpoint-AV re-scan stalls on reinstall.
 Source: "{#MyBuildDir}\*"; \
   DestDir: "{app}"; \
-  Flags: ignoreversion recursesubdirs createallsubdirs
+  Flags: ignoreversion recursesubdirs createallsubdirs; \
+  Check: ShouldCopyFile
 
 [Icons]
 ; Start Menu shortcut
@@ -75,6 +99,386 @@ Filename: "{app}\{#MyAppExeName}"; \
   Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; \
   Flags: nowait postinstall skipifsilent
 
+[InstallDelete]
+; Small leftovers only. Stale previous-version files are removed selectively in
+; [Code] (CurStepChanged/ssInstall) using the shipped _filemanifest.txt, so only
+; files the new build no longer contains are deleted. See DeleteStaleFiles.
+Type: filesandordirs; Name: "{app}\__pycache__"
+
 [UninstallDelete]
 ; Remove any .pyc caches left by the app
 Type: filesandordirs; Name: "{app}\__pycache__"
+
+[Code]
+{ ── Upgrade reassurance ──────────────────────────────────────────────────────
+  We install over any existing version in place (see [InstallDelete] + the
+  ignoreversion flag in [Files]) instead of running a separate uninstaller.
+  That avoids the slow, multi-minute file-by-file removal and the progress/hang
+  issues that came with it. The only thing the user needs to know is that
+  installing over an existing copy is safe.
+
+  The note is shown from InitializeWizard (the very first thing at startup, before
+  any wizard page) so it is impossible to miss — unlike PrepareToInstall, which
+  fires late and can flash past on a fast machine. }
+
+{ GetTickCount (ms since boot) is not a built-in Inno Pascal function — import it
+  from the Windows API for the phase-timing logs below. }
+function GetTickCount(): LongWord; external 'GetTickCount@kernel32.dll stdcall';
+
+{ Look up the previous install's registry key. Returns its base path, or '' if
+  no previous version is registered. }
+function GetUninstallKey(var Hive: Integer): String;
+var
+  RegKey: String;
+begin
+  RegKey := 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\' +
+            '{{#MyAppGuid}}_is1';
+  { Per-user installs (PrivilegesRequired=lowest) live under HKCU; a previous
+    admin install would be under HKLM. Check both. }
+  if RegKeyExists(HKCU, RegKey) then
+  begin
+    Hive := HKCU;
+    Result := RegKey;
+  end
+  else if RegKeyExists(HKLM, RegKey) then
+  begin
+    Hive := HKLM;
+    Result := RegKey;
+  end
+  else
+    Result := '';
+end;
+
+{ True if a previous version is installed; OutVersion gets its DisplayVersion. }
+function PreviousVersionInstalled(var OutVersion: String): Boolean;
+var
+  Hive: Integer;
+  RegKey: String;
+begin
+  OutVersion := '';
+  RegKey := GetUninstallKey(Hive);
+  if RegKey = '' then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if not RegQueryStringValue(Hive, RegKey, 'DisplayVersion', OutVersion) then
+    OutVersion := 'an earlier version';
+  Result := True;
+end;
+
+{ ── Selective stale-file cleanup ────────────────────────────────────────────
+  Deleting the WHOLE previous _internal (~2350 files) was the slow part: on
+  machines running endpoint anti-ransomware (e.g. Check Point EFRService), every
+  delete from an unknown installer process is intercepted/backed-up (~150 ms
+  each), so 2350 deletes took ~6.5 minutes.
+
+  Almost every file is identical by path between builds, so we don't need to
+  delete-then-recopy them — Inno's `ignoreversion` overwrites them in place.
+  We only need to delete files the NEW build no longer ships (truly stale).
+
+  The new build's file list is shipped as _filemanifest.txt in the app dir (one
+  relative path per line, lowercase, backslash-separated; generated by build.ps1).
+  We walk the old _internal and delete only paths absent from that set — typically
+  0 for a same-version rebuild, a few dozen across a version bump. Result: the
+  delete phase drops from minutes to well under a second even with anti-ransomware
+  active. }
+
+var
+  GManifest: TStringList;     { NEW build's "path|size" lines, ordinal-sorted }
+  GManifestLoaded: Boolean;   { True once GManifest is populated for this run }
+  GOldManifest: TStringList;  { PREVIOUS install's "path|size" lines (if present) }
+  GOldManifestLoaded: Boolean;{ True if the previous-install manifest was loaded }
+  GAppDir: String;            { cached app dir (ExpandConstant of app) + trailing backslash }
+  GCopied: Integer;           { files actually written by ShouldCopyFile=True }
+  GSkipped: Integer;          { unchanged files skipped (not rewritten) }
+  GDeleted: Integer;          { stale files deleted }
+  GDiagLogged: Boolean;       { one-time ShouldCopyFile diagnostic log guard }
+
+{ Load the temp-extracted _filemanifest.txt (lines "relpath|size") into GManifest,
+  pre-sorted (ordinal, lowercased) by build.ps1. Called once at ssInstall, before
+  the file copy. }
+procedure LoadManifest();
+var
+  OldPath: String;
+begin
+  { Both manifests are ordinal-sorted + lowercased (build.ps1 for the new one; the
+    old one was written the same way by the build that produced the prior install).
+    We load each into a PLAIN list (preserving that order) and binary-search with
+    CompareStr (ordinal). NOT Sorted — that re-sorts with Inno's locale order and
+    forbids index assignment. }
+  GManifest := TStringList.Create;
+  GManifestLoaded := False;
+  GOldManifest := TStringList.Create;
+  GOldManifestLoaded := False;
+
+  { NEW build manifest, extracted to temp before this runs. }
+  if FileExists(ExpandConstant('{tmp}\_filemanifest.txt')) then
+  begin
+    GManifest.LoadFromFile(ExpandConstant('{tmp}\_filemanifest.txt'));
+    GManifestLoaded := True;
+    Log(Format('Manifest: NEW build lists %d files.', [GManifest.Count]));
+  end
+  else
+    Log('Manifest: NEW _filemanifest.txt not in temp — skip-copy disabled (copy all).');
+
+  { PREVIOUS install manifest, sitting in the app dir from the last install. }
+  OldPath := GAppDir + '_filemanifest.txt';
+  if FileExists(OldPath) then
+  begin
+    GOldManifest.LoadFromFile(OldPath);
+    GOldManifestLoaded := True;
+    Log(Format('Manifest: PREVIOUS install lists %d files.', [GOldManifest.Count]));
+  end
+  else
+    Log('Manifest: no previous-install manifest — full copy, no stale cleanup.');
+end;
+
+{ Find the manifest line for relative path Rel. GManifest is sorted ascending as
+  "path|size" strings, so we run our OWN binary search for the key "Rel|" (the
+  separator '|' = #124 sorts after all path chars, so any "Rel|size" entry has
+  "Rel|" as an exact prefix and is unique). This avoids relying on Inno's Find()
+  not-found index behavior, which proved unreliable. Uses only [] and Count. }
+function ManifestFindIn(List: TStringList; Rel: String; var OutLine: String): Boolean;
+var
+  lo, hi, mid, klen, cmp: Integer;
+  key, cand: String;
+begin
+  Result := False;
+  if List = nil then Exit;
+  key := Rel + '|';
+  klen := Length(key);
+  lo := 0;
+  hi := List.Count - 1;
+  while lo <= hi do
+  begin
+    mid := (lo + hi) div 2;
+    cand := Copy(List[mid], 1, klen);        { prefix of candidate, key length }
+    { CompareStr = ordinal/byte comparison, matching the ordinal sort the manifest
+      was written with. (Inno's '<' on strings is locale-aware and would NOT match
+      that order, breaking the search.) }
+    cmp := CompareStr(cand, key);
+    if cmp = 0 then
+    begin
+      OutLine := List[mid];
+      Result := True;
+      Exit;
+    end
+    else if cmp < 0 then
+      lo := mid + 1
+    else
+      hi := mid - 1;
+  end;
+end;
+
+function SizeFromList(List: TStringList; Rel: String): String;
+var
+  line: String;
+  sep: Integer;
+begin
+  Result := '';
+  if ManifestFindIn(List, Rel, line) then
+  begin
+    sep := Pos('|', line);
+    if sep > 0 then
+      Result := Copy(line, sep + 1, Length(line));
+  end;
+end;
+
+{ Size of Rel in the NEW build, or '' if not shipped. }
+function ManifestSizeOf(Rel: String): String;
+begin
+  Result := SizeFromList(GManifest, Rel);
+end;
+
+{ Size of Rel in the PREVIOUS install, or '' if absent / no old manifest. }
+function OldManifestSizeOf(Rel: String): String;
+begin
+  if GOldManifestLoaded then
+    Result := SizeFromList(GOldManifest, Rel)
+  else
+    Result := '';
+end;
+
+{ Convert a file path from CurrentFileName() into its bundle-relative form
+  (matching the manifest keys, e.g. "_internal\sklearn\foo.pyd" or "novoface.exe").
+
+  CurrentFileName() returns the destination with the app dir as a LITERAL,
+  unexpanded constant prefix (the app constant followed by a backslash). Stripping
+  that exact prefix gives the true relative path for ANY file (any depth, any
+  subfolder), which is more correct than guessing from markers. We also keep the
+  expanded app-dir prefix and the "\_internal\" / basename fallbacks in case a
+  future Inno version expands the constant or returns a full path instead.
+
+  The literal "<brace>app<brace>\" prefix is built with Chr() so no brace ever
+  appears in the source (a literal brace would be parsed as a comment/constant). }
+function ToBundleRel(FullLower: String): String;
+var
+  p, prefLen: Integer;
+  appPrefix, litPrefix: String;
+begin
+  Result := '';
+
+  { 1. Literal app-constant prefix (app-brace + backslash) — built via Chr so no
+       brace appears in source. }
+  litPrefix := Chr(123) + 'app' + Chr(125) + '\';   { Chr 123 and 125 are the braces }
+  prefLen := Length(litPrefix);
+  if Copy(FullLower, 1, prefLen) = litPrefix then
+  begin
+    Result := Copy(FullLower, prefLen + 1, Length(FullLower));
+    Exit;
+  end;
+
+  { 2. Expanded app-dir prefix (GAppDir already has a trailing backslash). }
+  appPrefix := Lowercase(GAppDir);
+  prefLen := Length(appPrefix);
+  if (prefLen > 0) and (Copy(FullLower, 1, prefLen) = appPrefix) then
+  begin
+    Result := Copy(FullLower, prefLen + 1, Length(FullLower));
+    Exit;
+  end;
+
+  { 3. Fallback: locate the "\_internal\" marker. }
+  p := Pos('\_internal\', FullLower);
+  if p > 0 then
+  begin
+    Result := Copy(FullLower, p + 1, Length(FullLower));
+    Exit;
+  end;
+
+  { 4. Last resort: bare basename (top-level files). }
+  p := Length(FullLower);
+  while (p > 0) and (FullLower[p] <> '\') do
+    p := p - 1;
+  Result := Copy(FullLower, p + 1, Length(FullLower));
+end;
+
+function ShouldCopyFile(): Boolean;
+var
+  Dest, Rel, NewSize, OldSize: String;
+begin
+  Result := True;   { default: copy }
+  if not GManifestLoaded then Exit;
+
+  Dest := Lowercase(CurrentFileName());
+  Rel := ToBundleRel(Dest);
+
+  NewSize := ManifestSizeOf(Rel);                  { size in THIS build }
+  OldSize := OldManifestSizeOf(Rel);               { size in installed build }
+
+  if not GDiagLogged then
+  begin
+    GDiagLogged := True;
+    Log(Format('ShouldCopyFile DIAG: dest="%s" rel="%s" newSize="%s" oldSize="%s"', [Dest, Rel, NewSize, OldSize]));
+  end;
+
+  { Skip the write only when the previous install already has this exact file
+    (same relative path AND same size in both manifests). Pure in-memory check —
+    no FileExists/FileSize, so no per-file filesystem op for anti-ransomware to
+    tax. Anything new/changed/unknown falls through to a normal copy. }
+  if (NewSize <> '') and (NewSize = OldSize) then
+  begin
+    GSkipped := GSkipped + 1;
+    Result := False;
+  end
+  else
+    GCopied := GCopied + 1;
+end;
+
+{ ── Selective stale-file cleanup (in-memory manifest diff) ──────────────────
+  Deletes only files the PREVIOUS install shipped that this build no longer does.
+  We compute this purely from the two manifests — NO directory enumeration — so
+  there is zero per-file filesystem traffic for anti-ransomware to intercept
+  (the FindFirst/FindNext walk was what cost ~90 s). For each entry in the old
+  manifest, if its path is absent from the new manifest, delete that one file.
+  Typically 0 deletions for a same-version reinstall. }
+procedure DeleteStaleFiles();
+var
+  i, sep: Integer;
+  oldLine, rel, dummy: String;
+  TStart, TEnd: LongWord;
+begin
+  GDeleted := 0;
+  if not GManifestLoaded then
+  begin
+    Log('Auto-clean: no new manifest — skipping stale-file deletion.');
+    Exit;
+  end;
+  if not GOldManifestLoaded then
+  begin
+    Log('Auto-clean: no previous-install manifest — skipping stale-file deletion.');
+    Exit;
+  end;
+
+  TStart := GetTickCount();
+  WizardForm.StatusLabel.Caption := 'Removing files no longer needed...';
+  WizardForm.Refresh;
+
+  for i := 0 to GOldManifest.Count - 1 do
+  begin
+    oldLine := GOldManifest[i];
+    sep := Pos('|', oldLine);
+    if sep > 0 then
+      rel := Copy(oldLine, 1, sep - 1)
+    else
+      rel := oldLine;
+    if rel = '' then Continue;
+    { Present in the new build? then it stays (ShouldCopyFile handles it). }
+    if not ManifestFindIn(GManifest, rel, dummy) then
+    begin
+      if DeleteFile(GAppDir + rel) then
+        GDeleted := GDeleted + 1;
+    end;
+  end;
+
+  TEnd := GetTickCount();
+  Log(Format('Auto-clean TIMING: %d old entries, deleted %d stale in %d ms.', [GOldManifest.Count, GDeleted, TEnd - TStart]));
+end;
+
+{ Fires right before the new files are copied. Order matters:
+  1. Extract the manifest to the temp dir and load it (path->size map).
+  2. Delete stale files (paths the new build dropped).
+  3. The main [Files] copy then runs, with ShouldCopyFile skipping unchanged
+     files so unchanged large native DLLs are not rewritten/rescanned. }
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+  begin
+    GAppDir := AddBackslash(ExpandConstant('{app}'));
+    GCopied := 0;
+    GSkipped := 0;
+    GDiagLogged := False;
+    ExtractTemporaryFile('_filemanifest.txt');
+    LoadManifest();
+    Log('Auto-clean: ssInstall — removing stale files, then copying (skipping unchanged).');
+    DeleteStaleFiles();
+  end
+  else if CurStep = ssPostInstall then
+  begin
+    Log(Format('Copy phase: %d files written, %d unchanged files skipped, %d stale deleted.', [GCopied, GSkipped, GDeleted]));
+    if GManifest <> nil then GManifest.Free;
+    if GOldManifest <> nil then GOldManifest.Free;
+  end;
+end;
+
+{ Shown once, before any wizard page — guaranteed visible. }
+procedure InitializeWizard();
+var
+  OldVer: String;
+begin
+  if not PreviousVersionInstalled(OldVer) then
+    Exit;   { fresh install — no previous version, nothing to say }
+
+  MsgBox(
+    'NovoFace ' + OldVer + ' is already installed.' + #13#10 + #13#10
+    + 'This setup will update it to version {#MyAppVersion} by installing over '
+    + 'the existing version. This is perfectly safe:' + #13#10 + #13#10
+    + '  -  The old program files are replaced cleanly — no leftover or stale '
+    + 'files remain.' + #13#10
+    + '  -  Your scanned photos, face data, and database are stored separately '
+    + 'in your user folder and are NOT affected.' + #13#10
+    + '  -  Nothing is corrupted; the system is simply updated to the new '
+    + 'version.' + #13#10 + #13#10
+    + 'For best results, please close NovoFace before continuing.',
+    mbInformation, MB_OK);
+end;

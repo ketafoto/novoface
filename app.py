@@ -117,7 +117,7 @@ def _load_app_config() -> dict:
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            _log.exception("Failed to read app config %s", CONFIG_FILE)
     return {}
 
 def _save_app_config(cfg: dict):
@@ -132,7 +132,7 @@ def load_settings() -> dict:
         try:
             return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            _log.exception("Failed to read settings %s", SETTINGS_PATH)
     return {}
 
 
@@ -167,15 +167,15 @@ def _cleanup_children():
             try:
                 ch.terminate()
             except psutil.NoSuchProcess:
-                pass
+                pass  # already exited — nothing to terminate
         _, alive = psutil.wait_procs(children, timeout=3)
         for ch in alive:
             try:
                 ch.kill()
             except psutil.NoSuchProcess:
-                pass
+                pass  # already exited — nothing to kill
     except Exception:
-        pass
+        _log.exception("Child-process cleanup failed")
 
 
 atexit.register(_cleanup_children)
@@ -189,6 +189,7 @@ def get_backend() -> str:
             data = json.load(f)
             return "openvino" if data.get("backend") == "openvino" else "cpu"
     except Exception:
+        _log.exception("Failed to read backend config %s; defaulting to cpu", BACKEND_CONFIG)
         return "cpu"
 
 def set_backend(backend: str) -> None:
@@ -241,6 +242,7 @@ def _run_with_lower_priority(func, *args, **kwargs):
         finally:
             k32.SetThreadPriority(h, THREAD_PRIORITY_NORMAL)
     except Exception:
+        _log.debug("Lowering thread priority failed; running at normal priority", exc_info=True)
         return func(*args, **kwargs)
 
 
@@ -363,13 +365,13 @@ def _apply_cpu_limit(cpu_percent):
             kernel32.SetThreadPriority(kernel32.GetCurrentThread(),
                                        THREAD_MODE_BACKGROUND_BEGIN)
         except Exception:
-            pass
+            _log.debug("Lowering I/O priority failed", exc_info=True)
     else:
         try:
             import psutil
             psutil.Process().nice(10)
         except (PermissionError, AttributeError):
-            pass
+            _log.debug("Lowering process nice failed", exc_info=True)
 
 
 def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patterns=None):
@@ -516,6 +518,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
                 ).fetchone()[0]
             except Exception:
                 errs += 1
+                _log.warning("CPU scan: failed to process %s", path, exc_info=True)
                 try:
                     conn.execute(
                         "INSERT OR IGNORE INTO photos (file_path, processed_at) VALUES (?, ?)",
@@ -523,7 +526,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
                     )
                     conn.commit()
                 except Exception:
-                    pass
+                    _log.exception("CPU scan: failed to record errored photo %s", path)
             _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
 
             if (i + 1) % 200 == 0 and found > 0:
@@ -546,6 +549,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
         conn.close()
 
     except Exception as e:
+        _log.exception("CPU scan thread failed")
         _scan_ref.update(status="error", message=str(e))
 
 
@@ -699,6 +703,7 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
                 ).fetchone()[0]
             except Exception:
                 errs += 1
+                _log.warning("OpenVINO scan: failed to process %s", path, exc_info=True)
                 try:
                     conn.execute(
                         "INSERT OR IGNORE INTO photos (file_path, processed_at) VALUES (?, ?)",
@@ -706,7 +711,7 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
                     )
                     conn.commit()
                 except Exception:
-                    pass
+                    _log.exception("OpenVINO scan: failed to record errored photo %s", path)
             _scan_ref["photo_seconds"] = round(time.time() - photo_t0, 1)
 
             if (i + 1) % 200 == 0 and found > 0:
@@ -729,6 +734,7 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
         conn.close()
 
     except Exception as e:
+        _log.exception("OpenVINO scan thread failed")
         _scan_ref.update(status="error", message=str(e))
 
 
@@ -780,7 +786,7 @@ def api_thumbs_batch():
         try:
             out[p] = base64.b64encode(path.read_bytes()).decode("ascii")
         except OSError:
-            pass
+            _log.debug("Could not read thumb %s", path, exc_info=True)
     return jsonify(out)
 
 
@@ -801,7 +807,7 @@ def api_browse():
                     if Path(drive).exists():
                         drives.append({"name": f"{letter}:", "path": drive})
                 except OSError:
-                    pass
+                    _log.debug("Drive probe failed for %s", drive, exc_info=True)
             return jsonify({"current": "", "parent": None, "dirs": drives})
         else:
             requested = "/"
@@ -828,9 +834,9 @@ def api_browse():
                 elif file_exts and item.suffix.lower() in file_exts:
                     files.append({"name": item.name, "path": str(item)})
             except (PermissionError, OSError):
-                pass
+                _log.debug("Skipping inaccessible entry %s", item, exc_info=True)
     except (PermissionError, OSError):
-        pass
+        _log.debug("Could not list directory %s", p, exc_info=True)
 
     return jsonify({"current": str(p), "parent": parent, "dirs": dirs, "files": files})
 
@@ -935,6 +941,7 @@ def post_log_settings():
         import main as _main
         _main.reconfigure_logging(s["log_enabled"], s["log_max_mb"])
     except Exception:
+        _log.debug("reconfigure via main unavailable; applying logging directly", exc_info=True)
         import logging as _logging
         import logging.handlers as _lh
         root = _logging.getLogger()
@@ -1337,7 +1344,7 @@ def api_db_location_move():
         new_path.resolve().relative_to(DATA_DIR.resolve())
         return jsonify({"error": "New location cannot be inside the current data directory"}), 400
     except ValueError:
-        pass
+        pass  # not inside DATA_DIR — this is the valid case, continue
 
     import shutil
     try:
@@ -1399,7 +1406,7 @@ def api_db_remove_path():
                     p = Path.cwd() / p
                 p.unlink(missing_ok=True)
             except Exception:
-                pass
+                _log.debug("Could not delete thumb %s", tp, exc_info=True)
 
     conn.close()
 

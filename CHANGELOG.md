@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.2] — 2026-06-28
+
+### Changed
+- Scan failures now log a full traceback to `novoface.log` instead of only a short message, so intermittent backend/native-library errors can be diagnosed.
+- Added exception logging across the codebase (face detection, image loading, OpenVINO pipeline, config/settings reads, and shutdown) to surface previously-silent failures.
+- Installer now updates in place over an existing version, showing a brief note (with the detected version) confirming the update is safe and leaves your data untouched.
+- Upgrades are dramatically faster on machines with endpoint security (e.g. Check Point), which scans every file the installer writes or deletes: the installer now ships a file manifest and (a) deletes only files the new build no longer contains, and (b) skips rewriting files that are already byte-identical on disk — so unchanged large native libraries are neither re-deleted nor re-copied, avoiding the per-file security scan that previously made upgrades take many minutes.
+- Trimmed the OpenVINO model-optimizer tools and C++ dev headers from the bundle (never used at runtime), cutting the install from ~4000 to ~2350 files.
+- Installer always rebuilds from a clean PyInstaller cache (`--clean`) to prevent mismatched runtime modules from a previous build causing a startup crash.
+
+---
+
 ## [1.0.1] — 2026-05-09
 
 ### Added

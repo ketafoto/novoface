@@ -57,7 +57,7 @@ def _read_data_dir() -> Path:
             if d:
                 return Path(d)
         except Exception:
-            pass
+            _log.exception("Failed to read data_dir from %s", cfg)
     return Path("face_data")
 
 DATA_DIR = _read_data_dir()
@@ -157,6 +157,7 @@ def _is_grayscale_image(img, max_side: int = 200) -> bool:
         mean_sat = float(hsv[:, :, 1].mean())
         return mean_sat < 25
     except Exception:
+        _log.debug("Grayscale check failed", exc_info=True)
         return False
 
 
@@ -174,6 +175,7 @@ def extract_date(file_path: Path, img=None, exif: dict | None = None) -> tuple:
             with Image.open(file_path) as pil_img:
                 exif = pil_img._getexif()
         except Exception:
+            _log.debug("Could not read EXIF from %s", file_path, exc_info=True)
             exif = None
     if exif:
         try:
@@ -183,7 +185,7 @@ def extract_date(file_path: Path, img=None, exif: dict | None = None) -> tuple:
                     dt = datetime.strptime(val.strip(), "%Y:%m:%d %H:%M:%S")
                     return dt.strftime("%Y-%m-%d"), "exif"
         except Exception:
-            pass
+            _log.debug("EXIF date parse failed for %s", file_path, exc_info=True)
 
     path_str = str(file_path)
     parent_str = str(file_path.parent)
@@ -221,6 +223,7 @@ def load_image_cv2(file_path: Path, get_exif: bool = False):
                     with Image.open(file_path) as pil_img:
                         exif = pil_img._getexif()
                 except Exception:
+                    _log.debug("Could not read EXIF from %s", file_path, exc_info=True)
                     exif = None
                 return img, exif
             pil_img = Image.open(file_path)
@@ -235,6 +238,7 @@ def load_image_cv2(file_path: Path, get_exif: bool = False):
             img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return img
     except Exception:
+        _log.warning("Failed to load image %s", file_path, exc_info=True)
         return (None, None) if get_exif else None
 
 
@@ -264,6 +268,7 @@ def process_photo(
     try:
         detected_faces = face_app.get(img)
     except Exception:
+        _log.exception("Face detection failed for %s", file_path)
         detected_faces = []
 
     cursor = conn.execute(
@@ -452,7 +457,7 @@ def _face_providers():
         if "CUDAExecutionProvider" in providers:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
     except Exception:
-        pass
+        _log.debug("Provider detection failed; falling back to CPU", exc_info=True)
     return ["CPUExecutionProvider"]
 
 
@@ -545,6 +550,7 @@ def scan_archive(
             sys.exit(0)
         except Exception:
             errors += 1
+            _log.warning("Failed to process %s", fpath, exc_info=True)
             try:
                 conn.execute(
                     "INSERT OR IGNORE INTO photos (file_path, processed_at) VALUES (?, ?)",
@@ -552,7 +558,7 @@ def scan_archive(
                 )
                 conn.commit()
             except Exception:
-                pass
+                _log.exception("Failed to record errored photo %s", fpath)
 
     elapsed = time.time() - start
     print(f"\n\nDone! {total} photos in {elapsed / 3600:.1f}h")

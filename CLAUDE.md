@@ -200,6 +200,7 @@ The setup screen never appears again once a database exists.
 - `console=False` in the spec suppresses the black CMD window.
 - First build always requires manual testing — insightface/onnxruntime native DLLs sometimes need explicit `--collect-all` entries (already in the spec).
 - `openvino` is collected with `try/except` — if not installed in the build environment the bundle is CPU-only and the GPU option is hidden in the setup dialog. To include GPU support: `pip install openvino` before running `pyinstaller novoface.spec`.
+- **OpenVINO bundle trim:** after `collect_all("openvino")`, the spec filters out the `openvino/tools/` (model-optimizer `mo`, converter `ovc`, benchmark) and `openvino/include/` (C++ dev headers) subtrees — ~1649 loose files the app never imports at runtime (we only use `import openvino as ov` + `Core()`/model loading). This cuts the bundle from ~4000 to ~2350 files, which materially speeds up install/uninstall (on-access AV scanning is per-file). The runtime (`openvino/libs`, `runtime`, `frontend`) is kept. If a future feature needs the OpenVINO CLI tools, relax `_ov_is_dead_weight()` in the spec.
 - OpenVINO models (~262 MB) are **not** bundled — downloaded at first run via `urllib.request` (standard library, no extra deps).
 
 ---

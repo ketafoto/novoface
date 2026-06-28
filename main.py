@@ -62,6 +62,7 @@ def _read_log_settings() -> tuple[bool, int]:
         s = json.loads((DATA_DIR / "settings.json").read_text(encoding="utf-8"))
         return bool(s.get("log_enabled", True)), int(s.get("log_max_mb", 5))
     except Exception:
+        # Logging isn't configured yet here, so we can't log this; defaults are safe.
         return True, 5
 
 
@@ -71,6 +72,7 @@ def _setup_logging(enabled: bool = True, max_mb: int = 5) -> Path:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         log_path = DATA_DIR / "novoface.log"
     except Exception:
+        # The log handler isn't set up yet, so we can't log here — fall back to temp.
         import tempfile
         log_path = Path(tempfile.gettempdir()) / "novoface.log"
 
@@ -91,7 +93,7 @@ def _setup_logging(enabled: bool = True, max_mb: int = 5) -> Path:
     try:
         sys.stderr = open(log_path, "a", encoding="utf-8", buffering=1)
     except Exception:
-        pass
+        logging.warning("Could not redirect stderr to log file", exc_info=True)
 
     return log_path
 
@@ -165,7 +167,7 @@ def _detect_intel_gpu() -> str | None:
             if "intel" in nl and any(k in nl for k in ("iris", "arc", "uhd")):
                 return name
     except Exception:
-        pass
+        logging.debug("Intel GPU detection failed", exc_info=True)
     return None
 
 
@@ -271,6 +273,7 @@ def _show_download_dialog(data_dir: Path) -> bool:
             _download_openvino_models(data_dir, on_file=_on_file, on_progress=_on_progress)
             success[0] = True
         except Exception as exc:
+            logging.exception("OpenVINO model download failed")
             error_msg[0] = str(exc)
         finally:
             root.after(0, root.destroy)
@@ -454,11 +457,12 @@ def _wait_for_flask(
             urllib.request.urlopen(url, timeout=1)
             return
         except Exception:
+            # Expected while Flask is still starting — poll quietly, no logging.
             if tick:
                 try:
                     tick()
                 except Exception:
-                    pass
+                    logging.debug("Splash tick callback failed", exc_info=True)
             time.sleep(0.2)
     raise RuntimeError(
         f"Flask server did not start within {timeout}s — check for port conflicts."
@@ -493,14 +497,14 @@ def _update_splash(root, message: str) -> None:
         root._msg_var.set(message)
         root.update()
     except Exception:
-        pass
+        logging.debug("Splash update failed", exc_info=True)
 
 
 def _close_splash(root) -> None:
     try:
         root.destroy()
     except Exception:
-        pass
+        logging.debug("Splash close failed", exc_info=True)
 
 
 # ── Backend selection ─────────────────────────────────────────────────────────
@@ -599,7 +603,7 @@ def main() -> None:
             flask_app._scan_stop.set()
             flask_app._scan_thread.join(timeout=5)
     except Exception:
-        pass
+        logging.exception("Error during graceful scan shutdown")
     # Process now exits normally:
     #   • atexit fires _cleanup_children() → kills any OpenVINO subprocesses
     #   • remaining daemon threads (Flask, scan if still alive) are killed
@@ -619,5 +623,5 @@ if __name__ == "__main__":
                 f"novoface failed to start.\n\nLog: {_LOG_PATH}\n\n{msg}",
             )
         except Exception:
-            pass
+            logging.debug("Could not show startup-error dialog", exc_info=True)
         sys.exit(1)

@@ -42,6 +42,26 @@ try:
 except Exception:
     ov_datas, ov_binaries, ov_hidden = [], [], []
 
+# Trim OpenVINO dead weight: the runtime (libs/runtime/frontend) is all we use
+# (`import openvino as ov` + Core/model loading). The model-optimizer & converter
+# CLI tools (openvino/tools/mo, ovc, benchmark) and the C++ dev headers
+# (openvino/include) are never imported at runtime, but together they add ~1650
+# loose files — a large share of the bundle's file count, which is what makes
+# install/uninstall slow under on-access AV scanning. Drop them from the bundle.
+def _ov_is_dead_weight(dest):
+    # dest is the in-bundle directory path, e.g. "openvino\tools\mo\ops" or
+    # "openvino\include\openvino\op". Match the tools/ and include/ subtrees.
+    dest = dest.replace("\\", "/")
+    return (
+        dest == "openvino/tools" or dest.startswith("openvino/tools/")
+        or dest == "openvino/include" or dest.startswith("openvino/include/")
+    )
+
+_ov_before = len(ov_datas)
+ov_datas = [(src, dest) for (src, dest) in ov_datas if not _ov_is_dead_weight(dest)]
+print(f"[novoface.spec] OpenVINO data files: {_ov_before} -> {len(ov_datas)} "
+      f"(dropped {_ov_before - len(ov_datas)} tools/include files)")
+
 a = Analysis(
     ["main.py"],
     pathex=[],

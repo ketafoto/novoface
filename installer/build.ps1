@@ -91,11 +91,45 @@ $Version = (python -c "from version import __version__; print(__version__)")
 # -- Step 2: PyInstaller -------------------------------------------------------
 if (-not $SkipPyInstaller) {
     Invoke-Step "Step 2/3 -- PyInstaller (bundle app)" {
-        pyinstaller novoface.spec --noconfirm
+        # --clean wipes the PyInstaller build cache first. Without it, a stale
+        # build/ from a DIFFERENT PyInstaller version can splice mismatched
+        # runtime hooks + bootstrap modules into the bundle, producing a startup
+        # crash (e.g. "module 'pyimod02_importers' has no attribute
+        # 'PyiFrozenImporter'"). Always build from a clean cache.
+        pyinstaller novoface.spec --noconfirm --clean
     }
 } else {
     Write-Host ""
     Write-Host "--- Step 2/3 -- PyInstaller  [skipped via -SkipPyInstaller] ---" -ForegroundColor DarkGray
+}
+
+# -- Step 2b: file manifest ---------------------------------------------------
+# Write dist\novoface\_filemanifest.txt listing every bundled file (relative,
+# lowercase, backslash-separated). The installer uses it to delete ONLY files a
+# previous version shipped but this one doesn't — instead of wiping all ~2350
+# files of _internal. On machines with endpoint anti-ransomware (e.g. Check
+# Point), each delete from the installer is intercepted (~150 ms), so deleting
+# only the handful of truly-stale files cuts the upgrade from minutes to seconds.
+Invoke-Step "Step 2b/3 -- Generate file manifest" {
+    $distDir = Join-Path $RepoRoot "dist\novoface"
+    $manifestPath = Join-Path $distDir "_filemanifest.txt"
+    $prefixLen = $distDir.Length + 1
+    # Each line: "<relative-lowercase-path>|<size-in-bytes>". The installer uses
+    # the path set to delete stale files, and the size to skip RE-WRITING files
+    # that are already byte-identical on disk (same path + same size). Skipping
+    # unchanged large native DLLs avoids endpoint-AV (Check Point) re-scanning
+    # them on write, which otherwise stalls each big file for seconds.
+    $lines = Get-ChildItem $distDir -Recurse -File |
+        Where-Object { $_.Name -ne '_filemanifest.txt' } |
+        ForEach-Object { $_.FullName.Substring($prefixLen).ToLower() + '|' + $_.Length }
+    # Sort with ORDINAL comparison so the installer can binary-search using
+    # CompareStr (ordinal) without depending on Inno's own (locale) sort order.
+    $sorted = [string[]]$lines
+    [System.Array]::Sort($sorted, [System.StringComparer]::Ordinal)
+    # Write LF-terminated UTF-8 without BOM (Inno's LoadFromFile handles both).
+    [System.IO.File]::WriteAllLines($manifestPath, $sorted)
+    Write-Host "  wrote _filemanifest.txt ($($sorted.Count) entries, ordinal-sorted, with sizes)"
+    $global:LASTEXITCODE = 0
 }
 
 # -- Step 3: Inno Setup -------------------------------------------------------
