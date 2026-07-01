@@ -9,8 +9,8 @@ Run directly to generate build artifacts consumed by the installer toolchain:
     → installer/version_info.txt  (PyInstaller Windows VERSIONINFO)
 """
 
-__version__ = "1.0.1"
-__date__    = "2026-05-09"   # date of this release
+__version__ = "1.0.2"
+__date__    = "2026-07-01"   # date of this release
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:
