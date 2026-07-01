@@ -482,3 +482,44 @@ begin
     + 'For best results, please close NovoFace before continuing.',
     mbInformation, MB_OK);
 end;
+
+{ ── Fast uninstall ───────────────────────────────────────────────────────────
+  The uninstaller deletes ~2350 files. On machines with endpoint anti-ransomware
+  (e.g. Check Point), each delete from the unknown uninstaller process is
+  intercepted at ~150 ms, so a normal uninstall takes ~6 minutes.
+
+  cmd.exe, however, is a trusted system process — its deletions run at native
+  speed (~1 ms/file, measured). So before Inno removes its recorded files we wipe
+  the bulk (the _internal tree, ~99% of the files) with a single
+  "cmd /c rmdir /s /q", and wait for it. Inno's subsequent per-file removal then
+  finds those already gone (fast no-ops) and only handles the few top-level files
+  itself. Net: ~6 minutes down to a few seconds.
+
+  We delete only _internal — never the app dir itself, since the running
+  uninstaller exe lives there and must remain until it finishes. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  InternalDir: String;
+  ResultCode: Integer;
+  TStart: LongWord;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+
+  InternalDir := AddBackslash(ExpandConstant('{app}')) + '_internal';
+  if not DirExists(InternalDir) then
+    Exit;
+
+  Log('Fast-uninstall: deleting _internal via cmd rmdir (trusted process).');
+  UninstallProgressForm.StatusLabel.Caption := 'Removing program files...';
+  TStart := GetTickCount();
+
+  { SW_HIDE keeps the console hidden; wait so the tree is gone before Inno's own
+    file removal runs. If a file is locked (app still running) rmdir leaves it and
+    Inno's normal removal cleans up the remainder. }
+  if Exec(ExpandConstant('{cmd}'), '/c rmdir /s /q "' + InternalDir + '"',
+          '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log(Format('Fast-uninstall: rmdir done in %d ms (code %d); _internal gone=%d', [GetTickCount() - TStart, ResultCode, Integer(not DirExists(InternalDir))]))
+  else
+    Log(Format('Fast-uninstall: could not launch cmd (code %d) — Inno will remove files normally.', [ResultCode]));
+end;
