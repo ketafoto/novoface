@@ -1237,12 +1237,17 @@
     <div class="about-logo">novoface</div>
     <div class="about-version" id="about-version-text">v…</div>
     <div class="about-divider"></div>
+    <!-- Support email is assembled at runtime from the data-user / data-domain
+         parts (see fillSupportEmail()), so no complete "user@domain" string
+         is present in this committed HTML for address-harvesting scrapers to
+         scoop out of the public repo. The link stays a normal clickable +
+         copyable mailto for the user. -->
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;display:flex;align-items:center;gap:6px;justify-content:center">
-      <a href="mailto:support@contact.novotree.cz"
+      <a id="support-email-link" data-user="novoface" data-domain="novotree.cz"
+         href="#"
          style="color:#6b7280;text-decoration:none;user-select:text;-webkit-user-select:text"
-         onmouseover="this.style.color='#a5c3f3'" onmouseout="this.style.color='#6b7280'">support@contact.novotree.cz</a>
-      <button type="button" title="Copy email to clipboard" aria-label="Copy email to clipboard"
-              onclick="copyEmail('support@contact.novotree.cz')"
+         onmouseover="this.style.color='#a5c3f3'" onmouseout="this.style.color='#6b7280'"></a>
+      <button type="button" id="support-email-copy" title="Copy email to clipboard" aria-label="Copy email to clipboard"
               style="background:transparent;border:none;cursor:pointer;color:#6b7280;padding:2px;display:inline-flex;align-items:center;line-height:0"
               onmouseover="this.style.color='#a5c3f3'" onmouseout="this.style.color='#6b7280'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3720,12 +3725,28 @@ async function clearLogFile() {
   }
 }
 
+// Assemble the support address from its split data-* parts and wire the link +
+// copy button. Kept out of the static HTML so no full "user@domain" literal can
+// be harvested from the public repo (see the comment at #support-email-link).
+// Idempotent and lazy: runs when the About modal is first opened.
+function fillSupportEmail() {
+  const link = document.getElementById('support-email-link');
+  if (!link || link.dataset.filled) return;
+  const addr = link.dataset.user + '@' + link.dataset.domain;
+  link.textContent = addr;
+  link.href = 'mailto:' + addr;
+  const copyBtn = document.getElementById('support-email-copy');
+  if (copyBtn) copyBtn.addEventListener('click', () => copyEmail(addr));
+  link.dataset.filled = '1';
+}
+
 function showAboutModal() {
   const modal = document.getElementById('about-modal');
   const vEl = document.getElementById('about-version-text');
   // Sync version from the header badge if already loaded
   const badge = document.getElementById('app-version');
   if (badge && badge.textContent) vEl.textContent = badge.textContent;
+  fillSupportEmail();
   modal.style.display = 'flex';
 }
 
