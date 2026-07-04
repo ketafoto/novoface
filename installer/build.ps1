@@ -59,6 +59,40 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $RepoRoot
 
+# -- Preflight: the build MUST run from the project venv (venv-win) ------------
+# PyInstaller bundles from the Python it runs under. Building from any other
+# environment silently ships that env's package versions instead of the ones
+# pinned in requirements-lock.txt — which is exactly how an unpatched insightface
+# got bundled and caused the "No module named 'matplotlib'" scan crash. We refuse
+# to build unless venv-win is the active virtual environment.
+$ExpectedVenv = (Join-Path $RepoRoot "venv-win").TrimEnd('\')
+$ActiveVenv = if ($env:VIRTUAL_ENV) { $env:VIRTUAL_ENV.TrimEnd('\') } else { $null }
+if ($ActiveVenv -ine $ExpectedVenv) {
+    Write-Host ""
+    Write-Host "ERROR: Build must run from the project venv (venv-win)." -ForegroundColor Red
+    if ($ActiveVenv) {
+        Write-Host "  Active venv:   $ActiveVenv" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Active venv:   (none)" -ForegroundColor DarkGray
+    }
+    Write-Host "  Expected venv: $ExpectedVenv" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "Activate venv-win first, then re-run this script:" -ForegroundColor Yellow
+    Write-Host "    .\venv-win\Scripts\Activate.ps1" -ForegroundColor Cyan
+    Write-Host "    .\installer\build.ps1" -ForegroundColor Cyan
+    exit 1
+}
+
+# Fail early (with a clear fix) if the build tools are not in venv-win.
+python -c "import PyInstaller" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "ERROR: PyInstaller is not installed in venv-win." -ForegroundColor Red
+    Write-Host "Install the build prerequisites into the ACTIVE venv-win:" -ForegroundColor Yellow
+    Write-Host "    pip install pyinstaller pywebview platformdirs   # add: openvino for GPU" -ForegroundColor Cyan
+    exit 1
+}
+
 # -- Locate iscc.exe (Inno Setup Compiler) ------------------------------------
 $IsccCandidates = @(
     "$env:ProgramFiles\Inno Setup 6\iscc.exe",
@@ -91,12 +125,21 @@ $Version = (python -c "from version import __version__; print(__version__)")
 # -- Step 2: PyInstaller -------------------------------------------------------
 if (-not $SkipPyInstaller) {
     Invoke-Step "Step 2/3 -- PyInstaller (bundle app)" {
-        # --clean wipes the PyInstaller build cache first. Without it, a stale
-        # build/ from a DIFFERENT PyInstaller version can splice mismatched
-        # runtime hooks + bootstrap modules into the bundle, producing a startup
-        # crash (e.g. "module 'pyimod02_importers' has no attribute
-        # 'PyiFrozenImporter'"). Always build from a clean cache.
-        pyinstaller novoface.spec --noconfirm --clean
+        # Invoke PyInstaller as `python -m PyInstaller`, NOT the bare `pyinstaller`
+        # launcher. A `pyinstaller.exe` on PATH runs against whatever Python it was
+        # installed under — which may NOT be the active venv. If that other env has
+        # different packages (e.g. an UNPATCHED insightface, or a missing
+        # dependency), the bundle silently ships from the wrong environment.
+        # `python -m PyInstaller` ties the build to the active `python`, and fails
+        # LOUDLY ("No module named PyInstaller") if that env lacks it — instead of
+        # silently using the wrong one.
+        #
+        # --clean wipes the PyInstaller build cache first. Without it, a stale build/
+        # from a DIFFERENT PyInstaller version can splice mismatched runtime hooks +
+        # bootstrap modules into the bundle, producing a startup crash (e.g. "module
+        # 'pyimod02_importers' has no attribute 'PyiFrozenImporter'"). Always build
+        # from a clean cache.
+        python -m PyInstaller novoface.spec --noconfirm --clean
     }
 } else {
     Write-Host ""
@@ -114,21 +157,35 @@ Invoke-Step "Step 2b/3 -- Generate file manifest" {
     $distDir = Join-Path $RepoRoot "dist\novoface"
     $manifestPath = Join-Path $distDir "_filemanifest.txt"
     $prefixLen = $distDir.Length + 1
-    # Each line: "<relative-lowercase-path>|<size-in-bytes>". The installer uses
-    # the path set to delete stale files, and the size to skip RE-WRITING files
-    # that are already byte-identical on disk (same path + same size). Skipping
-    # unchanged large native DLLs avoids endpoint-AV (Check Point) re-scanning
-    # them on write, which otherwise stalls each big file for seconds.
+    # Each line: "<relative-lowercase-path>|<size-in-bytes>|<sha1-hex>". The
+    # installer uses the path set to delete stale files, and the size+hash pair to
+    # skip RE-WRITING files already byte-identical on disk. Skipping unchanged large
+    # native DLLs avoids endpoint-AV (Check Point) re-scanning them on write, which
+    # otherwise stalls each big file for seconds.
+    #
+    # Hash (not size alone) is REQUIRED for correctness: two different builds can
+    # emit a same-size-but-different .pyd (e.g. a UPX-compressed scipy extension vs.
+    # an uncompressed rebuild). A size-only skip left the stale/corrupt file in
+    # place, so a "reinstall to fix" silently did nothing — the classic "we fixed
+    # scipy and the error came back" bug. Content hash makes the skip byte-exact.
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
     $lines = Get-ChildItem $distDir -Recurse -File |
         Where-Object { $_.Name -ne '_filemanifest.txt' } |
-        ForEach-Object { $_.FullName.Substring($prefixLen).ToLower() + '|' + $_.Length }
+        ForEach-Object {
+            $rel = $_.FullName.Substring($prefixLen).ToLower()
+            $fs = [System.IO.File]::OpenRead($_.FullName)
+            try { $hash = [System.BitConverter]::ToString($sha1.ComputeHash($fs)).Replace('-', '').ToLower() }
+            finally { $fs.Dispose() }
+            $rel + '|' + $_.Length + '|' + $hash
+        }
+    $sha1.Dispose()
     # Sort with ORDINAL comparison so the installer can binary-search using
     # CompareStr (ordinal) without depending on Inno's own (locale) sort order.
     $sorted = [string[]]$lines
     [System.Array]::Sort($sorted, [System.StringComparer]::Ordinal)
     # Write LF-terminated UTF-8 without BOM (Inno's LoadFromFile handles both).
     [System.IO.File]::WriteAllLines($manifestPath, $sorted)
-    Write-Host "  wrote _filemanifest.txt ($($sorted.Count) entries, ordinal-sorted, with sizes)"
+    Write-Host "  wrote _filemanifest.txt ($($sorted.Count) entries, ordinal-sorted, with sizes+hashes)"
     $global:LASTEXITCODE = 0
 }
 

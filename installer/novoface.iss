@@ -185,9 +185,9 @@ end;
   active. }
 
 var
-  GManifest: TStringList;     { NEW build's "path|size" lines, ordinal-sorted }
+  GManifest: TStringList;     { NEW build's "path|size|hash" lines, ordinal-sorted }
   GManifestLoaded: Boolean;   { True once GManifest is populated for this run }
-  GOldManifest: TStringList;  { PREVIOUS install's "path|size" lines (if present) }
+  GOldManifest: TStringList;  { PREVIOUS install's "path|size|hash" lines (if present) }
   GOldManifestLoaded: Boolean;{ True if the previous-install manifest was loaded }
   GAppDir: String;            { cached app dir (ExpandConstant of app) + trailing backslash }
   GCopied: Integer;           { files actually written by ShouldCopyFile=True }
@@ -195,7 +195,7 @@ var
   GDeleted: Integer;          { stale files deleted }
   GDiagLogged: Boolean;       { one-time ShouldCopyFile diagnostic log guard }
 
-{ Load the temp-extracted _filemanifest.txt (lines "relpath|size") into GManifest,
+{ Load the temp-extracted _filemanifest.txt (lines "relpath|size|hash") into GManifest,
   pre-sorted (ordinal, lowercased) by build.ps1. Called once at ssInstall, before
   the file copy. }
 procedure LoadManifest();
@@ -235,8 +235,8 @@ begin
 end;
 
 { Find the manifest line for relative path Rel. GManifest is sorted ascending as
-  "path|size" strings, so we run our OWN binary search for the key "Rel|" (the
-  separator '|' = #124 sorts after all path chars, so any "Rel|size" entry has
+  "path|size|hash" strings, so we run our OWN binary search for the key "Rel|" (the
+  separator '|' = #124 sorts after all path chars, so any "Rel|size|hash" entry has
   "Rel|" as an exact prefix and is unique). This avoids relying on Inno's Find()
   not-found index behavior, which proved unreliable. Uses only [] and Count. }
 function ManifestFindIn(List: TStringList; Rel: String; var OutLine: String): Boolean;
@@ -271,7 +271,13 @@ begin
   end;
 end;
 
-function SizeFromList(List: TStringList; Rel: String): String;
+{ Return the identity tail of a manifest line: everything after the FIRST '|'.
+  With the manifest format "path|size|hash", this yields "size|hash" as one string.
+  Comparing that whole tail between builds requires BOTH size AND content hash to
+  match — so a same-size-but-different file (e.g. a UPX-corrupted scipy .pyd vs. a
+  clean rebuild) is correctly seen as changed and gets rewritten. Do NOT reduce this
+  to size only: that reintroduces the "reinstall silently keeps the corrupt file" bug. }
+function IdentityFromList(List: TStringList; Rel: String): String;
 var
   line: String;
   sep: Integer;
@@ -281,21 +287,21 @@ begin
   begin
     sep := Pos('|', line);
     if sep > 0 then
-      Result := Copy(line, sep + 1, Length(line));
+      Result := Copy(line, sep + 1, Length(line));   { "size|hash" }
   end;
 end;
 
-{ Size of Rel in the NEW build, or '' if not shipped. }
-function ManifestSizeOf(Rel: String): String;
+{ Identity ("size|hash") of Rel in the NEW build, or '' if not shipped. }
+function ManifestIdentityOf(Rel: String): String;
 begin
-  Result := SizeFromList(GManifest, Rel);
+  Result := IdentityFromList(GManifest, Rel);
 end;
 
-{ Size of Rel in the PREVIOUS install, or '' if absent / no old manifest. }
-function OldManifestSizeOf(Rel: String): String;
+{ Identity ("size|hash") of Rel in the PREVIOUS install, or '' if absent / no old manifest. }
+function OldManifestIdentityOf(Rel: String): String;
 begin
   if GOldManifestLoaded then
-    Result := SizeFromList(GOldManifest, Rel)
+    Result := IdentityFromList(GOldManifest, Rel)
   else
     Result := '';
 end;
@@ -355,7 +361,7 @@ end;
 
 function ShouldCopyFile(): Boolean;
 var
-  Dest, Rel, NewSize, OldSize: String;
+  Dest, Rel, NewId, OldId: String;
 begin
   Result := True;   { default: copy }
   if not GManifestLoaded then Exit;
@@ -363,20 +369,20 @@ begin
   Dest := Lowercase(CurrentFileName());
   Rel := ToBundleRel(Dest);
 
-  NewSize := ManifestSizeOf(Rel);                  { size in THIS build }
-  OldSize := OldManifestSizeOf(Rel);               { size in installed build }
+  NewId := ManifestIdentityOf(Rel);                { "size|hash" in THIS build }
+  OldId := OldManifestIdentityOf(Rel);             { "size|hash" in installed build }
 
   if not GDiagLogged then
   begin
     GDiagLogged := True;
-    Log(Format('ShouldCopyFile DIAG: dest="%s" rel="%s" newSize="%s" oldSize="%s"', [Dest, Rel, NewSize, OldSize]));
+    Log(Format('ShouldCopyFile DIAG: dest="%s" rel="%s" newId="%s" oldId="%s"', [Dest, Rel, NewId, OldId]));
   end;
 
-  { Skip the write only when the previous install already has this exact file
-    (same relative path AND same size in both manifests). Pure in-memory check —
-    no FileExists/FileSize, so no per-file filesystem op for anti-ransomware to
-    tax. Anything new/changed/unknown falls through to a normal copy. }
-  if (NewSize <> '') and (NewSize = OldSize) then
+  { Skip the write only when the previous install already has this file byte-for-byte
+    (same relative path AND same size|hash in both manifests). Pure in-memory check —
+    no FileExists/FileSize, so no per-file filesystem op for anti-ransomware to tax.
+    Anything new/changed(content)/unknown falls through to a normal copy. }
+  if (NewId <> '') and (NewId = OldId) then
   begin
     GSkipped := GSkipped + 1;
     Result := False;
@@ -387,16 +393,25 @@ end;
 
 { ── Selective stale-file cleanup (in-memory manifest diff) ──────────────────
   Deletes only files the PREVIOUS install shipped that this build no longer does.
-  We compute this purely from the two manifests — NO directory enumeration — so
-  there is zero per-file filesystem traffic for anti-ransomware to intercept
-  (the FindFirst/FindNext walk was what cost ~90 s). For each entry in the old
-  manifest, if its path is absent from the new manifest, delete that one file.
-  Typically 0 deletions for a same-version reinstall. }
+  We compute the stale set purely from the two manifests — NO directory
+  enumeration — so there is zero per-file filesystem traffic for anti-ransomware
+  to intercept during the diff (the FindFirst/FindNext walk was what cost ~90 s).
+
+  The ACTUAL deletes are then done by a cmd.exe batch (a trusted process), NOT by
+  Inno's DeleteFile() loop — the same reason the fast-uninstall path shells out to
+  `rmdir`. Endpoint anti-ransomware throttles deletes from the unknown setup
+  process at ~150 ms each; from cmd.exe they run at native speed. Without this, a
+  version bump that drops many files (e.g. a bundle trim: 3785 -> 2384 files =
+  1401 stale) hangs the installer for minutes mid-run. Typically 0 deletions for a
+  same-version reinstall, so the batch/cmd path is skipped entirely then. }
 procedure DeleteStaleFiles();
 var
   i, sep: Integer;
   oldLine, rel, dummy: String;
   TStart, TEnd: LongWord;
+  Stale: TStringList;
+  BatPath, BatBody: String;
+  ResultCode: Integer;
 begin
   GDeleted := 0;
   if not GManifestLoaded then
@@ -414,21 +429,80 @@ begin
   WizardForm.StatusLabel.Caption := 'Removing files no longer needed...';
   WizardForm.Refresh;
 
-  for i := 0 to GOldManifest.Count - 1 do
-  begin
-    oldLine := GOldManifest[i];
-    sep := Pos('|', oldLine);
-    if sep > 0 then
-      rel := Copy(oldLine, 1, sep - 1)
-    else
-      rel := oldLine;
-    if rel = '' then Continue;
-    { Present in the new build? then it stays (ShouldCopyFile handles it). }
-    if not ManifestFindIn(GManifest, rel, dummy) then
+  { Collect the stale relative paths (present in the OLD manifest, absent in the
+    NEW one). This is a pure in-memory manifest diff — no filesystem traffic yet. }
+  Stale := TStringList.Create;
+  try
+    for i := 0 to GOldManifest.Count - 1 do
     begin
-      if DeleteFile(GAppDir + rel) then
-        GDeleted := GDeleted + 1;
+      oldLine := GOldManifest[i];
+      sep := Pos('|', oldLine);
+      if sep > 0 then
+        rel := Copy(oldLine, 1, sep - 1)
+      else
+        rel := oldLine;
+      if rel = '' then Continue;
+      { Present in the new build? then it stays (ShouldCopyFile handles it). }
+      if not ManifestFindIn(GManifest, rel, dummy) then
+        Stale.Add(rel);
     end;
+
+    if Stale.Count = 0 then
+    begin
+      Log('Auto-clean: no stale files to delete.');
+      TEnd := GetTickCount();
+      Log(Format('Auto-clean TIMING: %d old entries, deleted 0 stale in %d ms.', [GOldManifest.Count, TEnd - TStart]));
+      Exit;
+    end;
+
+    { CRITICAL PERFORMANCE FIX (2026-07-04): delete the stale files via a batch
+      script run by cmd.exe — a TRUSTED system process — NOT via Inno's own
+      DeleteFile() loop. Endpoint anti-ransomware (Check Point) intercepts each
+      delete from the UNKNOWN setup/uninstaller process at ~150 ms; deleting from
+      cmd.exe runs at native speed. This is the SAME trick the fast-uninstall path
+      uses (rmdir /s /q via cmd). It matters here because a version bump that drops
+      many files (e.g. a bundle-trim) can make 1000+ files stale — at 150 ms each
+      that is minutes of hang in the middle of the installer. (Measured: 1401
+      stale files took 213 s via DeleteFile() vs. a few seconds via cmd.)
+
+      Each line is: del /f /q "C:\...\app\<rel>"  (quoted absolute path). We build
+      one batch file so cmd is launched exactly once. }
+    BatBody := '@echo off' + #13#10;
+    for i := 0 to Stale.Count - 1 do
+      BatBody := BatBody + 'del /f /q "' + GAppDir + Stale[i] + '"' + #13#10;
+
+    BatPath := ExpandConstant('{tmp}\novoface_stale_del.bat');
+    if SaveStringToFile(BatPath, BatBody, False) then
+    begin
+      if Exec(ExpandConstant('{cmd}'), '/c "' + BatPath + '"', '', SW_HIDE,
+              ewWaitUntilTerminated, ResultCode) then
+      begin
+        { cmd's `del` is quiet on success; count what actually went away so the
+          summary reflects reality even if a file was locked. }
+        for i := 0 to Stale.Count - 1 do
+          if not FileExists(GAppDir + Stale[i]) then
+            GDeleted := GDeleted + 1;
+        Log(Format('Auto-clean: cmd batch deleted %d/%d stale files (trusted process, code %d).', [GDeleted, Stale.Count, ResultCode]));
+      end
+      else
+      begin
+        { cmd failed to launch — fall back to Inno's per-file delete (slow but works). }
+        Log(Format('Auto-clean: cmd launch failed (code %d) — falling back to DeleteFile() loop.', [ResultCode]));
+        for i := 0 to Stale.Count - 1 do
+          if DeleteFile(GAppDir + Stale[i]) then
+            GDeleted := GDeleted + 1;
+      end;
+    end
+    else
+    begin
+      { Could not write the batch — fall back to per-file delete. }
+      Log('Auto-clean: could not write stale-delete batch — falling back to DeleteFile() loop.');
+      for i := 0 to Stale.Count - 1 do
+        if DeleteFile(GAppDir + Stale[i]) then
+          GDeleted := GDeleted + 1;
+    end;
+  finally
+    Stale.Free;
   end;
 
   TEnd := GetTickCount();

@@ -11,3 +11,4 @@ psutil
 # Belows are for one-time setup installer for Windows
 platformdirs
 pywebview
+pyinstaller   # builds dist/novoface/ — see installer/build.ps1 (must be in the build venv)

@@ -374,6 +374,84 @@ def _apply_cpu_limit(cpu_percent):
             _log.debug("Lowering process nice failed", exc_info=True)
 
 
+def _fast_rmtree(path):
+    """Delete a whole directory tree fast, even under endpoint anti-ransomware.
+
+    On Windows, deleting many files from THIS (app) process is intercepted by
+    anti-ransomware (e.g. Check Point) at ~150 ms/file — thousands of thumbnails
+    would take minutes. cmd.exe is a TRUSTED system process and runs `rmdir /s /q`
+    at native speed (the same trick the installer/uninstaller use). Falls back to
+    shutil.rmtree on non-Windows, or for anything cmd leaves behind (locked files).
+    """
+    import shutil
+    path = Path(path)
+    if not path.exists():
+        return
+    if sys.platform == "win32":
+        try:
+            import subprocess
+            subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(path)],
+                           creationflags=0x08000000,  # CREATE_NO_WINDOW — no console flash
+                           capture_output=True)
+            if not path.exists():
+                return
+        except Exception:
+            _log.debug("Fast rmdir failed for %s — falling back to shutil.", path, exc_info=True)
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _prune_missing_photos(conn, folders, _scan_ref):
+    """Remove photos whose file no longer exists on disk (deleted for real).
+
+    MUST run only AFTER the scan loop has finished, so that moved photos have
+    already had their path updated in-place via hash-match (see the move-detection
+    branch in the scan loop). By the time we get here, any photo still pointing at a
+    missing path was genuinely deleted (or moved outside all scanned folders) — no
+    re-recognition needed.
+
+    Scope: only photos located under one of the currently-scanned `folders`. Photos
+    outside the scan set (e.g. on an unmounted external/network drive) are left alone.
+    """
+    # Normalise scanned-folder prefixes for a case-insensitive "is under" test on Windows.
+    prefixes = [os.path.normcase(str(Path(f))) for f in folders]
+    if not prefixes:
+        return
+
+    rows = conn.execute("SELECT id, file_path FROM photos").fetchall()
+    missing_ids = []
+    for pid, fpath in rows:
+        norm = os.path.normcase(str(Path(fpath)))
+        # Only prune photos under a scanned folder.
+        if not any(norm == pre or norm.startswith(pre + os.sep) for pre in prefixes):
+            continue
+        if not Path(fpath).exists():
+            missing_ids.append(pid)
+
+    if not missing_ids:
+        return
+
+    _scan_ref.update(message=f"Removing {len(missing_ids)} photos no longer on disk…")
+    ph = ",".join("?" * len(missing_ids))
+    thumb_rows = conn.execute(
+        f"SELECT thumb_path FROM faces WHERE photo_id IN ({ph}) AND thumb_path IS NOT NULL",
+        missing_ids,
+    ).fetchall()
+    conn.execute(f"DELETE FROM faces WHERE photo_id IN ({ph})", missing_ids)
+    conn.execute(f"DELETE FROM photos WHERE id IN ({ph})", missing_ids)
+    conn.commit()
+
+    for (tp,) in thumb_rows:
+        try:
+            p = Path(tp)
+            if not p.is_absolute():
+                p = Path.cwd() / p
+            p.unlink(missing_ok=True)
+        except Exception:
+            _log.debug("Could not delete thumb %s", tp, exc_info=True)
+
+    _log.info("Pruned %d photos whose files no longer exist on disk", len(missing_ids))
+
+
 def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patterns=None):
     from insightface.app import FaceAnalysis
     from face_scan import _face_providers
@@ -434,6 +512,8 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
                      message=f"Resuming: {new_count} new photos ({prev_photos} already done)...")
 
         if new_count == 0:
+            # No new files to match against, so any missing file is a genuine deletion.
+            _prune_missing_photos(conn, folders, _scan_ref)
             _scan_ref.update(status="clustering", message="No new photos. Re-clustering...")
             _run_with_lower_priority(
                 cluster_faces, conn, threshold,
@@ -538,6 +618,10 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
                 )
                 _scan_ref["message"] = prev_msg
 
+        # Scan loop is done — every moved file has had its path updated in-place by now.
+        # Any photo still pointing at a missing file was genuinely deleted; prune it.
+        _prune_missing_photos(conn, folders, _scan_ref)
+
         _scan_ref.update(current=grand_total, faces_found=found, errors=errs,
                      status="clustering", message="Final clustering...")
         _run_with_lower_priority(
@@ -605,6 +689,8 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
         grand_total = prev_photos + new_count
 
         if new_count == 0:
+            # No new files to match against, so any missing file is a genuine deletion.
+            _prune_missing_photos(conn, folders, _scan_ref)
             _scan_ref.update(status="clustering", total=grand_total, current=prev_photos,
                          faces_found=prev_faces,
                          message="No new photos. Re-clustering...")
@@ -722,6 +808,10 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
                     progress_cb=lambda d, t: _scan_ref.update(message=f"Interim clustering... {d}/{t} faces"),
                 )
                 _scan_ref["message"] = prev_msg
+
+        # Scan loop is done — every moved file has had its path updated in-place by now.
+        # Any photo still pointing at a missing file was genuinely deleted; prune it.
+        _prune_missing_photos(conn, folders, _scan_ref)
 
         _scan_ref.update(current=grand_total, faces_found=found, errors=errs,
                      status="clustering", message="Final clustering...")
@@ -1129,9 +1219,8 @@ def reset_database():
             DELETE FROM clusters;
             DELETE FROM cluster_groups;
         """)
-        import shutil
         if THUMB_DIR.is_dir():
-            shutil.rmtree(THUMB_DIR)
+            _fast_rmtree(THUMB_DIR)
             THUMB_DIR.mkdir(parents=True, exist_ok=True)
     else:
         conn.executescript("""
@@ -1140,9 +1229,8 @@ def reset_database():
             DELETE FROM clusters;
             DELETE FROM cluster_groups;
         """)
-        import shutil
         if THUMB_DIR_OV.is_dir():
-            shutil.rmtree(THUMB_DIR_OV)
+            _fast_rmtree(THUMB_DIR_OV)
             THUMB_DIR_OV.mkdir(parents=True, exist_ok=True)
     conn.close()
     _scan_thread_backend = None

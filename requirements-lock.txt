@@ -45,3 +45,12 @@ tqdm==4.68.3
 typing_extensions==4.15.0
 urllib3==2.7.0
 Werkzeug==3.1.8
+# ── Build/packaging toolchain (not needed to RUN the app; required to BUILD the ──
+# installer via installer/build.ps1). Kept here so `pip install -r requirements-lock.txt`
+# provisions a venv-win that can both run AND build. `pip install pyinstaller` pulls
+# the four deps below automatically; they are pinned for a reproducible bundle.
+altgraph==0.17.4
+pefile==2023.2.7
+pyinstaller==6.11.1
+pyinstaller-hooks-contrib==2026.4
+pywin32-ctypes==0.2.2
