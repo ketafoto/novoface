@@ -1008,6 +1008,14 @@
     display: block;
     background: var(--border);
   }
+  /* Full-photo mode: show the whole scene (letterboxed) instead of a face crop —
+     for scanning composition ("is this person with others?"). A squarer tile fits
+     both portrait and landscape reasonably; contain guarantees nothing is cropped. */
+  .face-grid.full-photo .face-card img {
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    background: var(--bg);   /* darker letterbox bars read as intentional */
+  }
   /* Hover popover: full-scene preview of a face card's source photo */
   #hover-preview {
     position: fixed;
@@ -1253,6 +1261,31 @@
     color: var(--on-accent);
   }
   .theme-toggle .theme-icon { font-size: 15px; line-height: 1; }
+
+  /* ── View toggle (Face / Full photo, in the Review detail header) ── */
+  .view-toggle {
+    display: inline-flex;
+    height: 32px;               /* line up with the sibling inputs' box height */
+    padding: 3px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    gap: 2px;
+  }
+  .view-toggle button {
+    padding: 0 12px;
+    border: none;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .view-toggle button:hover { color: var(--text); }
+  .view-toggle button.active { background: var(--accent); color: var(--on-accent); }
 </style>
 <script>
   // Apply persisted theme before first paint to avoid flash.
@@ -1686,6 +1719,18 @@ function updateFaceSizeReadout() {
   const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
   el.textContent = cols ? `(${cols}/row)` : '';
 }
+
+// Review thumbnail view: 'face' = tight face crops (identity review / naming),
+// 'full' = the whole source photo (scene/composition scanning). Full mode reuses
+// the cached /api/photo/preview endpoint as the card image. Persisted like size.
+let _faceView = (localStorage.getItem('novoface_face_view') === 'full') ? 'full' : 'face';
+
+function setFaceView(view) {
+  _faceView = (view === 'full') ? 'full' : 'face';
+  try { localStorage.setItem('novoface_face_view', _faceView); } catch (e) {}
+  renderDetail();   // re-render so cards swap crop <-> full photo (and object-fit)
+}
+
 let _lastScanStatus = 'idle';
 let _cachedOrphanCount = 0;  // updated by updateScanBtnState(), reused by startScan()
 
@@ -3513,6 +3558,13 @@ function renderDetail(cluster) {
         <button class="btn btn-merge" onclick="showMergeModal()">Merge into...</button>
       </div>
       <div class="field">
+        <label>View</label>
+        <div class="view-toggle" title="Face crops (naming) vs. whole photos (scene scanning)">
+          <button class="${_faceView === 'face' ? 'active' : ''}" onclick="setFaceView('face')">Face</button>
+          <button class="${_faceView === 'full' ? 'active' : ''}" onclick="setFaceView('full')">Full photo</button>
+        </div>
+      </div>
+      <div class="field">
         <label>Size <span id="face-size-cols" style="color:var(--accent)"></span></label>
         <input type="range" id="inp-face-size" min="65" max="165" step="5"
                value="${_faceSize}" oninput="setFaceSize(this.value)"
@@ -3523,7 +3575,7 @@ function renderDetail(cluster) {
       <span>${selectedFaces.size} selected — drag to a cluster to move</span>
       <button onclick="selectedFaces.clear();_lastSelectedIdx=-1;renderDetail()">Clear</button>
     </div>` : ''}
-    <div class="face-grid${_faceSize < FACE_SIZE_COMPACT ? ' compact' : ''}">`;
+    <div class="face-grid${_faceSize < FACE_SIZE_COMPACT ? ' compact' : ''}${_faceView === 'full' ? ' full-photo' : ''}">`;
 
   for (const f of faces) {
     const year = f.photo_date ? f.photo_date.substring(0, 4) : '?';
@@ -3548,7 +3600,10 @@ function renderDetail(cluster) {
            ondragstart="hideHoverPreview();startFaceDrag(event,${faceId})"
            oncontextmenu="event.preventDefault();event.stopPropagation();hideHoverPreview();showFaceContextMenu(event,${faceId})">
         <div class="sel-check" onclick="event.stopPropagation();toggleFaceSelect(event,${faceId},${faces.indexOf(f)})">${isSelected ? '✓' : ''}</div>
-        <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" data-thumb="${esc(f.thumb_path)}" alt="face" loading="lazy" draggable="false">
+        <img src="${_faceView === 'full'
+            ? `/api/photo/preview/${f.photo_id}`
+            : (detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`)}"
+             data-thumb="${esc(f.thumb_path)}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
           <span class="date">${year}</span>
           ${ageStr ? `<span class="age">${ageStr}</span>` : ''}
