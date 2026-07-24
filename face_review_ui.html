@@ -901,6 +901,15 @@
   .detail-header input:focus { border-color: var(--accent); }
   .detail-header input[type="text"] { width: 220px; }
   .detail-header input[type="number"] { width: 90px; }
+  .detail-header input[type="range"] {
+    width: 120px;
+    padding: 0;
+    height: 32px;               /* line up with the other inputs' box height */
+    background: transparent;
+    border: none;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
 
   .btn {
     padding: 6px 14px;
@@ -950,9 +959,15 @@
 
   .face-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    /* Column min-width is driven by the Size slider in the detail header. The grid
+       re-flows automatically, so resizing thumbnails is a single CSS-var change. */
+    grid-template-columns: repeat(auto-fill, minmax(var(--face-min, 160px), 1fr));
     gap: 16px;
   }
+  /* Below a threshold width the date/age/path text can't fit — go contact-sheet:
+     hide the meta block entirely so tiny cards are just the face image. Toggled by
+     JS on the grid element based on the slider value. */
+  .face-grid.compact .face-card .meta { display: none; }
   .face-card {
     background: var(--bg-card);
     border-radius: 10px;
@@ -1637,6 +1652,40 @@
 let currentTab = 'scanner';
 let clustersLoaded = false;
 let reviewNeedsRefresh = false;
+
+// Review thumbnail size (grid column min-width, px). Persisted like the theme.
+// Range is tuned for composition-scanning via the hover preview: the small end
+// packs ~12 faces per row for fast sweeping, the large end caps at ~5 per row.
+// Below FACE_SIZE_COMPACT the per-card date/age/path text can't fit, so the grid
+// switches to a contact-sheet (image-only) layout — see setFaceSize().
+const FACE_SIZE_MIN = 65, FACE_SIZE_MAX = 165;
+const FACE_SIZE_COMPACT = 110;   // below this the date/age/path text can't fit
+let _faceSize = (() => {
+  const v = parseInt(localStorage.getItem('novoface_face_size'), 10);
+  return (v >= FACE_SIZE_MIN && v <= FACE_SIZE_MAX) ? v : 120;  // 120 = comfortable mid
+})();
+
+function setFaceSize(px) {
+  _faceSize = parseInt(px, 10) || 160;
+  // Clamp into range so a value persisted under an old/wider slider range can't
+  // linger (e.g. an old 320 would otherwise size cards larger than the max).
+  _faceSize = Math.min(FACE_SIZE_MAX, Math.max(FACE_SIZE_MIN, _faceSize));
+  document.documentElement.style.setProperty('--face-min', _faceSize + 'px');
+  const grid = document.querySelector('#main .face-grid');
+  if (grid) grid.classList.toggle('compact', _faceSize < FACE_SIZE_COMPACT);
+  updateFaceSizeReadout();
+  try { localStorage.setItem('novoface_face_size', _faceSize); } catch (e) {}
+}
+
+// Live "(N/row)" readout next to the Size label — the real feedback the user
+// cares about is columns per row, not the pixel value.
+function updateFaceSizeReadout() {
+  const el = document.getElementById('face-size-cols');
+  const grid = document.querySelector('#main .face-grid');
+  if (!el || !grid) return;
+  const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
+  el.textContent = cols ? `(${cols}/row)` : '';
+}
 let _lastScanStatus = 'idle';
 let _cachedOrphanCount = 0;  // updated by updateScanBtnState(), reused by startScan()
 
@@ -3463,12 +3512,18 @@ function renderDetail(cluster) {
         <label>&nbsp;</label>
         <button class="btn btn-merge" onclick="showMergeModal()">Merge into...</button>
       </div>
+      <div class="field">
+        <label>Size <span id="face-size-cols" style="color:var(--accent)"></span></label>
+        <input type="range" id="inp-face-size" min="65" max="165" step="5"
+               value="${_faceSize}" oninput="setFaceSize(this.value)"
+               title="Thumbnail size — smaller fits more per row for fast composition scanning">
+      </div>
     </div>
     ${selectedFaces.size > 0 ? `<div class="face-select-bar">
       <span>${selectedFaces.size} selected — drag to a cluster to move</span>
       <button onclick="selectedFaces.clear();_lastSelectedIdx=-1;renderDetail()">Clear</button>
     </div>` : ''}
-    <div class="face-grid">`;
+    <div class="face-grid${_faceSize < FACE_SIZE_COMPACT ? ' compact' : ''}">`;
 
   for (const f of faces) {
     const year = f.photo_date ? f.photo_date.substring(0, 4) : '?';
@@ -3503,6 +3558,7 @@ function renderDetail(cluster) {
   }
   html += '</div>';
   document.getElementById('main').innerHTML = html;
+  updateFaceSizeReadout();  // grid just (re)built — refresh the "(N/row)" hint
 }
 
 // ---- Full-photo hover preview -------------------------------------------------
@@ -3924,6 +3980,7 @@ function closeDonateModal() {
 }
 
 async function init() {
+  setFaceSize(_faceSize);   // apply persisted thumbnail size before any detail renders
   fetch('/api/version').then(r => r.json()).then(d => {
     const ver = 'v' + d.version;
     const el = document.getElementById('app-version');
