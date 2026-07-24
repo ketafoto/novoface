@@ -383,6 +383,48 @@ def _apply_cpu_limit(cpu_percent):
             _log.debug("Lowering process nice failed", exc_info=True)
 
 
+class _RateWindow:
+    """Sliding-window throughput estimator for scan progress / ETA.
+
+    A cumulative average (done / total_elapsed) makes a bad ETA here for two
+    reasons: (1) the pre-loop setup + file-list diff on a 100k-photo archive is a
+    large fixed cost that gets amortised into every sample, dragging the average
+    down forever; (2) a re-scan alternates cheap hash-skips with expensive real
+    encodes, so lifetime speed is meaningless. Both make the naive ETA *grow*
+    over time instead of counting down.
+
+    Instead we keep the last `window_s` seconds of (time, done) samples and derive
+    the rate from the oldest sample still inside the window — i.e. how fast it's
+    actually going *right now*. The baseline also self-anchors at the first
+    `add()` (first real work), so setup time never pollutes the estimate.
+    """
+
+    def __init__(self, window_s: float = 30.0):
+        self.window_s = window_s
+        self._samples: list[tuple[float, int]] = []  # (monotonic time, done count)
+
+    def add(self, done: int) -> None:
+        now = time.monotonic()
+        self._samples.append((now, done))
+        cutoff = now - self.window_s
+        # Keep one sample older than the cutoff so the window spans the full range.
+        drop = 0
+        while drop + 1 < len(self._samples) and self._samples[drop + 1][0] < cutoff:
+            drop += 1
+        if drop:
+            del self._samples[:drop]
+
+    def rate(self) -> float:
+        """Images per second over the recent window, or 0 until enough data."""
+        if len(self._samples) < 2:
+            return 0.0
+        t_old, d_old = self._samples[0]
+        t_new, d_new = self._samples[-1]
+        dt = t_new - t_old
+        dd = d_new - d_old
+        return dd / dt if dt > 0 and dd > 0 else 0.0
+
+
 def _fast_rmtree(path):
     """Delete a whole directory tree fast, even under endpoint anti-ransomware.
 
@@ -536,6 +578,7 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
         found = prev_faces
         errs = 0
         t0 = time.time()
+        rate_win = _RateWindow(window_s=30.0)  # recent-speed estimator for ETA / s-per-img
 
         # If we have faces but no clusters (e.g. server was restarted before pause-handler ran clustering),
         # run clustering once so Review shows data without waiting for the next interim run.
@@ -566,9 +609,14 @@ def _run_scan(folders, det_size, threshold, cpu_percent, _scan_ref, exclude_patt
                 return
 
             elapsed = time.time() - t0
-            rate = (i + 1) / elapsed if elapsed > 1 else 0
-            eta = (new_count - i - 1) / rate if rate > 0 else 0
-            spi = elapsed / (i + 1) if i > 0 else 0
+            # ETA and s/img come from a recent sliding window, not the lifetime
+            # average — the latter is polluted by setup time and re-scan skips and
+            # makes the ETA climb instead of count down. See _RateWindow.
+            rate_win.add(i + 1)
+            rate = rate_win.rate()
+            remaining = new_count - i - 1
+            eta = remaining / rate if rate > 0 else 0
+            spi = (1.0 / rate) if rate > 0 else 0
             _scan_ref.update(current=prev_photos + i + 1, faces_found=found, errors=errs,
                          rate=round(rate, 2), eta_seconds=round(eta),
                          elapsed_seconds=round(elapsed),
@@ -727,6 +775,7 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
         found = prev_faces
         errs = 0
         t0 = time.time()
+        rate_win = _RateWindow(window_s=30.0)  # recent-speed estimator for ETA / s-per-img
 
         # If we have faces but no clusters (e.g. server was restarted before pause-handler ran clustering),
         # run clustering once so Review shows data without waiting for the next interim run.
@@ -757,9 +806,14 @@ def _run_scan_openvino(folders, threshold, cpu_percent, _scan_ref, exclude_patte
                 return
 
             elapsed = time.time() - t0
-            rate = (i + 1) / elapsed if elapsed > 1 else 0
-            eta = (new_count - i - 1) / rate if rate > 0 else 0
-            spi = elapsed / (i + 1) if i > 0 else 0
+            # ETA and s/img come from a recent sliding window, not the lifetime
+            # average — the latter is polluted by setup time and re-scan skips and
+            # makes the ETA climb instead of count down. See _RateWindow.
+            rate_win.add(i + 1)
+            rate = rate_win.rate()
+            remaining = new_count - i - 1
+            eta = remaining / rate if rate > 0 else 0
+            spi = (1.0 / rate) if rate > 0 else 0
             _scan_ref.update(current=prev_photos + i + 1, faces_found=found, errors=errs,
                          rate=round(rate, 2), eta_seconds=round(eta),
                          elapsed_seconds=round(elapsed),
