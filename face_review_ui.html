@@ -993,6 +993,58 @@
     display: block;
     background: var(--border);
   }
+  /* Hover popover: full-scene preview of a face card's source photo */
+  #hover-preview {
+    position: fixed;
+    z-index: 9000;
+    pointer-events: none;   /* never steals hover / clicks from the grid */
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-card);
+    box-shadow: 0 12px 40px var(--shadow-modal);
+    opacity: 0;
+    transition: opacity 0.12s;
+    display: none;
+  }
+  #hover-preview.visible { opacity: 1; }
+  #hover-preview img {
+    display: block;
+    max-width: 40vw;
+    max-height: 70vh;
+    border-radius: 6px;
+    background: var(--border);
+  }
+  /* Action hint at the bottom of the preview — replaces the native title tooltip,
+     which collided with this popover on hover. */
+  #hover-preview .hp-hint {
+    max-width: 40vw;
+    margin-top: 4px;
+    padding: 5px 8px 1px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-2);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #hover-preview.missing .hp-hint { display: none; }
+  /* Shown instead of the image when the original file is gone from disk */
+  #hover-preview .hp-missing {
+    display: none;
+    max-width: 280px;
+    padding: 14px 16px;
+    border-radius: 6px;
+    background: var(--bg-card);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-2);
+  }
+  #hover-preview .hp-missing .hp-missing-title { font-weight: 600; margin-bottom: 4px; }
+  #hover-preview .hp-missing .hp-missing-hint { color: var(--accent); font-size: 12px; }
+  #hover-preview.missing img { display: none; }
+  #hover-preview.missing .hp-missing { display: block; }
   .face-card .meta { padding: 8px 10px; }
   .face-card .date { font-size: 13px; font-weight: 600; color: var(--text-2); }
   .face-card .age { font-size: 12px; color: var(--accent); margin-left: 6px; }
@@ -3413,11 +3465,14 @@ function renderDetail(cluster) {
     const isSelected = selectedFaces.has(faceId);
     html += `
       <div class="face-card${isSelected ? ' selected' : ''}" onclick="copyPath('${escJs(f.file_path)}')"
-           title="Click to copy path · Double-click to open in default app · Drag to move · Right-click for menu"
            draggable="true"
-           ondblclick="event.stopPropagation();openPhoto('${escJs(f.file_path)}')"
-           ondragstart="startFaceDrag(event,${faceId})"
-           oncontextmenu="event.preventDefault();event.stopPropagation();showFaceContextMenu(event,${faceId})">
+           data-photo="${f.photo_id}"
+           onmouseenter="scheduleHoverPreview(event,${f.photo_id})"
+           onmousemove="moveHoverPreview(event)"
+           onmouseleave="hideHoverPreview()"
+           ondblclick="event.stopPropagation();hideHoverPreview();openPhoto('${escJs(f.file_path)}')"
+           ondragstart="hideHoverPreview();startFaceDrag(event,${faceId})"
+           oncontextmenu="event.preventDefault();event.stopPropagation();hideHoverPreview();showFaceContextMenu(event,${faceId})">
         <div class="sel-check" onclick="event.stopPropagation();toggleFaceSelect(event,${faceId},${faces.indexOf(f)})">${isSelected ? '✓' : ''}</div>
         <img src="${detailThumbCache[f.thumb_path] || `/thumbs/${f.thumb_path}`}" data-thumb="${esc(f.thumb_path)}" alt="face" loading="lazy" draggable="false">
         <div class="meta">
@@ -3429,6 +3484,91 @@ function renderDetail(cluster) {
   }
   html += '</div>';
   document.getElementById('main').innerHTML = html;
+}
+
+// ---- Full-photo hover preview -------------------------------------------------
+// A single reused popover shows the whole source photo when the cursor rests on a
+// face card, so the user can read the scene without opening the external viewer.
+let _hoverTimer = null;
+let _hoverPhotoId = null;
+const HOVER_DELAY_MS = 350;  // rest-time before showing; avoids loads while sweeping
+
+function _hoverEl() {
+  let el = document.getElementById('hover-preview');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'hover-preview';
+    el.innerHTML =
+      '<img alt="photo preview" draggable="false">' +
+      '<div class="hp-missing">' +
+        '<div class="hp-missing-title">Original photo not found on disk</div>' +
+        'The file was moved or deleted. ' +
+        '<span class="hp-missing-hint">Re-run a scan to prune stale thumbnails.</span>' +
+      '</div>' +
+      '<div class="hp-hint">Click: copy path · Double-click: open · Drag: move · Right-click: menu</div>';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function scheduleHoverPreview(event, photoId) {
+  clearTimeout(_hoverTimer);
+  const x = event.clientX, y = event.clientY;
+  _hoverTimer = setTimeout(() => {
+    _hoverPhotoId = photoId;
+    const el = _hoverEl();
+    const img = el.querySelector('img');
+    el.classList.remove('missing');
+    const reveal = () => {
+      el.style.display = 'block';
+      _positionHoverPreview(x, y);
+      requestAnimationFrame(() => el.classList.add('visible'));
+    };
+    // Reveal only once the image has decoded, so we never flash an empty box or
+    // position a zero-size popover. Guard against a stale load if the cursor moved on.
+    img.onload = () => { if (_hoverPhotoId === photoId) reveal(); };
+    // Missing original (endpoint 404s) → show the placeholder instead of nothing,
+    // so it's clear the photo is gone rather than the feature being broken.
+    img.onerror = () => {
+      if (_hoverPhotoId !== photoId) return;
+      el.classList.add('missing');
+      reveal();
+    };
+    img.src = `/api/photo/preview/${photoId}`;
+  }, HOVER_DELAY_MS);
+}
+
+function moveHoverPreview(event) {
+  const el = document.getElementById('hover-preview');
+  if (el && el.style.display === 'block') _positionHoverPreview(event.clientX, event.clientY);
+}
+
+function _positionHoverPreview(x, y) {
+  const el = document.getElementById('hover-preview');
+  if (!el) return;
+  const pad = 18;                     // gap from cursor
+  const w = el.offsetWidth, h = el.offsetHeight;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Prefer bottom-right of the cursor; flip when it would clip the viewport edge.
+  let left = x + pad;
+  if (left + w > vw - 8) left = x - pad - w;
+  if (left < 8) left = 8;
+  let top = y + pad;
+  if (top + h > vh - 8) top = y - pad - h;
+  if (top < 8) top = 8;
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+}
+
+function hideHoverPreview() {
+  clearTimeout(_hoverTimer);
+  _hoverPhotoId = null;
+  const el = document.getElementById('hover-preview');
+  if (el) {
+    el.classList.remove('visible', 'missing');
+    el.style.display = 'none';
+    el.querySelector('img').removeAttribute('src');  // cancel any in-flight load
+  }
 }
 
 function toggleFaceSelect(event, faceId, idx) {
@@ -3644,6 +3784,9 @@ function initPathScroll() {
     if (!span) return;
     span.classList.remove('path-scrolling');
   }, true);
+  // Scrolling the grid can move a card out from under the cursor without a
+  // reliable mouseleave (momentum scroll) — hide the preview so it never lingers.
+  main.addEventListener('scroll', hideHoverPreview, { passive: true });
 }
 
 // ── Settings tab — Theme ───────────────────────────────────────────────────

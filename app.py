@@ -59,6 +59,13 @@ except ImportError:
     DB_PATH_OV = DATA_DIR / "faces_ov.db"
     THUMB_DIR_OV = DATA_DIR / "thumbs_ov"
 
+# Cached medium-size full-photo previews for the Review hover popover (one JPEG
+# per photo_id, generated on first request). Per-backend like thumbs so a Reset
+# Database wipe on one backend never nukes the other's cache.
+PREVIEW_DIR = DATA_DIR / "previews"
+PREVIEW_DIR_OV = DATA_DIR / "previews_ov"
+PREVIEW_MAX_EDGE = 1280  # long-edge px cap for the generated preview
+
 app = Flask(__name__)
 
 
@@ -268,6 +275,8 @@ def ensure_db():
     DATA_DIR.mkdir(exist_ok=True)
     THUMB_DIR.mkdir(exist_ok=True)
     THUMB_DIR_OV.mkdir(parents=True, exist_ok=True)
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    PREVIEW_DIR_OV.mkdir(parents=True, exist_ok=True)
     conn = init_db(DB_PATH)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS scan_folders (
@@ -857,6 +866,46 @@ def serve_thumb(filename):
     return resp
 
 
+@app.route("/api/photo/preview/<int:photo_id>")
+def serve_photo_preview(photo_id):
+    """Serve a cached medium-size JPEG of the full original photo (Review hover popover).
+
+    Downscales the original to PREVIEW_MAX_EDGE on the long edge on first request and
+    caches it to previews/ (per backend), so repeat hovers are a plain static file send
+    instead of re-decoding a multi-MB scan JPEG every time.
+    """
+    preview_dir = PREVIEW_DIR if get_backend() == "cpu" else PREVIEW_DIR_OV
+    cache_path = preview_dir / f"{photo_id}.jpg"
+    if cache_path.is_file():
+        resp = send_file(str(cache_path), mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+        return resp
+
+    conn = get_db()
+    row = conn.execute("SELECT file_path FROM photos WHERE id = ?", (photo_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Unknown photo"}), 404
+    src = Path(row["file_path"])
+    if not src.is_file():
+        return jsonify({"error": "File not found"}), 404
+
+    try:
+        from PIL import Image, ImageOps
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im)  # honour camera orientation
+            im.thumbnail((PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE))  # in-place, keeps aspect
+            im.convert("RGB").save(cache_path, "JPEG", quality=85)
+    except Exception as e:
+        _log.warning("Preview generation failed for photo %s (%s): %s", photo_id, src, e)
+        return jsonify({"error": "Preview failed"}), 500
+
+    resp = send_file(str(cache_path), mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @app.route("/api/thumbs", methods=["POST"])
 def api_thumbs_batch():
     """Return multiple thumb images as base64. Body: {"paths": ["a.jpg", "b.jpg", ...]}. Max 200 paths."""
@@ -1222,6 +1271,9 @@ def reset_database():
         if THUMB_DIR.is_dir():
             _fast_rmtree(THUMB_DIR)
             THUMB_DIR.mkdir(parents=True, exist_ok=True)
+        if PREVIEW_DIR.is_dir():
+            _fast_rmtree(PREVIEW_DIR)
+            PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
     else:
         conn.executescript("""
             DELETE FROM faces;
@@ -1232,6 +1284,9 @@ def reset_database():
         if THUMB_DIR_OV.is_dir():
             _fast_rmtree(THUMB_DIR_OV)
             THUMB_DIR_OV.mkdir(parents=True, exist_ok=True)
+        if PREVIEW_DIR_OV.is_dir():
+            _fast_rmtree(PREVIEW_DIR_OV)
+            PREVIEW_DIR_OV.mkdir(parents=True, exist_ok=True)
     conn.close()
     _scan_thread_backend = None
     return jsonify({"ok": True})
