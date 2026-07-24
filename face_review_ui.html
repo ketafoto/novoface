@@ -864,7 +864,7 @@
   .cluster-item .name.unnamed { color: var(--text-muted); font-style: italic; }
   .cluster-item .count { font-size: 12px; color: var(--text-muted); }
 
-  .main { flex: 1; overflow-y: auto; padding: 24px; }
+  .main { flex: 1; overflow-y: auto; padding: 14px 24px 24px; }
   .main-empty {
     display: flex;
     align-items: center;
@@ -874,37 +874,65 @@
     font-size: 16px;
   }
 
+  /* Compact single-row toolbar: no stacked labels (fields use placeholders + title
+     tooltips) so the header stays one short line and leaves the vertical space for
+     photos. All controls are a uniform 30px tall and vertically centred. */
   .detail-header {
     display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 24px;
+    align-items: center;
+    gap: 8px 10px;
+    margin-bottom: 12px;
     flex-wrap: wrap;
   }
-  .detail-header .field { display: flex; flex-direction: column; gap: 4px; }
-  .detail-header label {
+  /* Two logical clusters: identity fields (left) and view controls (right). */
+  .detail-header .hdr-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  /* View controls are a distinct cluster, pushed to the right edge and separated
+     from the identity controls by a gap + subtle divider. */
+  .detail-header .hdr-group.view-group {
+    margin-left: auto;
+    padding-left: 20px;
+    border-left: 1px solid var(--border);
+  }
+  .detail-header .field { display: flex; align-items: center; gap: 6px; }
+  /* Size readout is the only inline label kept — it's live info, not a name tag. */
+  .detail-header .field label {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .detail-header .field.action .btn {
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    padding-top: 0;
+    padding-bottom: 0;
   }
   .detail-header input {
-    padding: 6px 10px;
+    padding: 4px 9px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--bg-input);
     color: var(--text);
-    font-size: 14px;
+    font-size: 13px;
     outline: none;
     font-family: inherit;
   }
   .detail-header input:focus { border-color: var(--accent); }
-  .detail-header input[type="text"] { width: 220px; }
-  .detail-header input[type="number"] { width: 90px; }
+  /* Uniform 30px box height across text/number/select so the single row is even. */
+  .detail-header input, .detail-header select { height: 30px; box-sizing: border-box; }
+  .detail-header input[type="text"] { width: 190px; }
+  .detail-header input[type="number"] { width: 80px; }
   .detail-header input[type="range"] {
-    width: 120px;
+    width: 80px;
     padding: 0;
-    height: 32px;               /* line up with the other inputs' box height */
+    height: 30px;               /* match the other inputs' box height */
     background: transparent;
     border: none;
     accent-color: var(--accent);
@@ -1265,7 +1293,8 @@
   /* ── View toggle (Face / Full photo, in the Review detail header) ── */
   .view-toggle {
     display: inline-flex;
-    height: 32px;               /* line up with the sibling inputs' box height */
+    height: 30px;               /* match the sibling inputs' box height */
+    box-sizing: border-box;
     padding: 3px;
     background: var(--bg-input);
     border: 1px solid var(--border);
@@ -1706,18 +1735,7 @@ function setFaceSize(px) {
   document.documentElement.style.setProperty('--face-min', _faceSize + 'px');
   const grid = document.querySelector('#main .face-grid');
   if (grid) grid.classList.toggle('compact', _faceSize < FACE_SIZE_COMPACT);
-  updateFaceSizeReadout();
   try { localStorage.setItem('novoface_face_size', _faceSize); } catch (e) {}
-}
-
-// Live "(N/row)" readout next to the Size label — the real feedback the user
-// cares about is columns per row, not the pixel value.
-function updateFaceSizeReadout() {
-  const el = document.getElementById('face-size-cols');
-  const grid = document.querySelector('#main .face-grid');
-  if (!el || !grid) return;
-  const cols = getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length;
-  el.textContent = cols ? `(${cols}/row)` : '';
 }
 
 // Review thumbnail view: 'face' = tight face crops (identity review / naming),
@@ -3531,44 +3549,42 @@ function renderDetail(cluster) {
 
   let html = `
     <div class="detail-header" data-cluster-id="${c.id}">
-      <div class="field">
-        <label>Person name</label>
-        <input type="text" id="inp-name" value="${esc(c.name || '')}"
-               placeholder="Enter name..." onkeydown="if(event.key==='Enter')saveCluster()">
-      </div>
-      <div class="field">
-        <label>Birth year</label>
-        <input type="number" id="inp-birth" value="${c.birth_year || ''}"
-               placeholder="e.g. 1947" min="1800" max="2030"
-               onkeydown="if(event.key==='Enter')saveCluster()">
-      </div>
-      <div class="field" style="justify-content:flex-end">
-        <label>&nbsp;</label>
-        <button class="btn btn-save" onclick="saveCluster()">Save</button>
-      </div>
-      <div class="field">
-        <label>Group</label>
-        <select id="inp-group" onchange="assignGroup()">
-          <option value="">— None —</option>
-          ${groups.map(g => `<option value="${g.id}" ${c.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="field" style="justify-content:flex-end; margin-left:auto">
-        <label>&nbsp;</label>
-        <button class="btn btn-merge" onclick="showMergeModal()">Merge into...</button>
-      </div>
-      <div class="field">
-        <label>View</label>
-        <div class="view-toggle" title="Face crops (naming) vs. whole photos (scene scanning)">
-          <button class="${_faceView === 'face' ? 'active' : ''}" onclick="setFaceView('face')">Face</button>
-          <button class="${_faceView === 'full' ? 'active' : ''}" onclick="setFaceView('full')">Full photo</button>
+      <div class="hdr-group identity-group">
+        <div class="field">
+          <input type="text" id="inp-name" value="${esc(c.name || '')}"
+                 placeholder="Person name…" title="Person name"
+                 onkeydown="if(event.key==='Enter')saveCluster()">
+        </div>
+        <div class="field">
+          <input type="number" id="inp-birth" value="${c.birth_year || ''}"
+                 placeholder="Birth yr" title="Birth year" min="1800" max="2030"
+                 onkeydown="if(event.key==='Enter')saveCluster()">
+        </div>
+        <div class="field">
+          <select id="inp-group" title="Group" onchange="assignGroup()">
+            <option value="">— Group —</option>
+            ${groups.map(g => `<option value="${g.id}" ${c.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field action">
+          <button class="btn btn-save" onclick="saveCluster()">Save</button>
+        </div>
+        <div class="field action">
+          <button class="btn btn-merge" onclick="showMergeModal()">Merge into…</button>
         </div>
       </div>
-      <div class="field">
-        <label>Size <span id="face-size-cols" style="color:var(--accent)"></span></label>
-        <input type="range" id="inp-face-size" min="65" max="165" step="5"
-               value="${_faceSize}" oninput="setFaceSize(this.value)"
-               title="Thumbnail size — smaller fits more per row for fast composition scanning">
+      <div class="hdr-group view-group">
+        <div class="field">
+          <input type="range" id="inp-face-size" min="65" max="165" step="5"
+                 value="${_faceSize}" oninput="setFaceSize(this.value)"
+                 title="Thumbnail size — smaller fits more per row for fast composition scanning">
+        </div>
+        <div class="field">
+          <div class="view-toggle" title="Face crops (naming) vs. whole photos (scene scanning)">
+            <button class="${_faceView === 'face' ? 'active' : ''}" onclick="setFaceView('face')">Face</button>
+            <button class="${_faceView === 'full' ? 'active' : ''}" onclick="setFaceView('full')">Full</button>
+          </div>
+        </div>
       </div>
     </div>
     ${selectedFaces.size > 0 ? `<div class="face-select-bar">
@@ -3613,7 +3629,6 @@ function renderDetail(cluster) {
   }
   html += '</div>';
   document.getElementById('main').innerHTML = html;
-  updateFaceSizeReadout();  // grid just (re)built — refresh the "(N/row)" hint
 }
 
 // ---- Full-photo hover preview -------------------------------------------------
