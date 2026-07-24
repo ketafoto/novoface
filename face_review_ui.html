@@ -2520,8 +2520,16 @@ function updateScanUI(s) {
     btn.textContent = remaining > 0 ? `Resume Scan (${remaining} left)` : 'Scan for New';
     _cachedOrphanCount = 0;  // scan just ran — no new orphans
     loadStats();
-    reviewNeedsRefresh = true;
     document.querySelector('[data-tab="review"]').classList.add('has-update');
+    if (currentTab === 'review') {
+      // Already viewing Review — refresh now so pruned/added faces update in place,
+      // instead of waiting for the user to leave and re-enter the tab.
+      clusterFaces = {};
+      firstThumb = {};
+      loadClusters();
+    } else {
+      reviewNeedsRefresh = true;  // refresh lazily on next switch to Review
+    }
   } else if (s.status === 'error') {
     progress.style.display = 'block';
     fill.className = 'progress-fill';
@@ -2633,6 +2641,17 @@ async function loadClusters() {
     _thumbsProgress = '';
     updateReviewLoadingOverlay();
     renderSidebar();
+  }
+
+  // Refresh the open cluster's detail too. loadClusters() only rebuilds the
+  // sidebar + first-face thumbs; without this the detail grid keeps rendering the
+  // stale cached clusterFaces[] (e.g. a face whose photo was just pruned as
+  // missing). switchTab() clears the caches, so a fresh selectCluster() re-fetches.
+  // Awaited on purpose: it piggybacks on the same "Please wait" overlay the caller
+  // is already showing, so the user waits once, not twice.
+  if (activeCluster) {
+    delete clusterFaces[activeCluster.id];
+    await selectCluster(activeCluster.id);
   }
 }
 
