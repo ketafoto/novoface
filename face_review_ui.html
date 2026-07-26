@@ -1746,6 +1746,10 @@ let _faceView = (localStorage.getItem('novoface_face_view') === 'full') ? 'full'
 function setFaceView(view) {
   _faceView = (view === 'full') ? 'full' : 'face';
   try { localStorage.setItem('novoface_face_view', _faceView); } catch (e) {}
+  // Cancel any in-flight face-crop batch-load (selectCluster/peekCluster). Without
+  // this, a load started in face view keeps overwriting card src with crops after
+  // we switch to full view, reverting the grid to face crops mid-scroll.
+  _detailLoadGen++;
   renderDetail();   // re-render so cards swap crop <-> full photo (and object-fit)
 }
 
@@ -3453,6 +3457,11 @@ async function selectCluster(id) {
   // Render immediately with /thumbs/ fallback URLs — user sees photos right away
   renderDetail();
   if (paths.length === 0) return;
+  // In Full-photo view the cards show /api/photo/preview/<id>, NOT face crops — the
+  // face-crop batch-loader below would overwrite each card's src back to a crop
+  // (reverting the grid to face view). Skip it; face view still works via the
+  // /thumbs/ fallback in renderDetail when the user switches back.
+  if (_faceView === 'full') return;
   // Show progress indicator for large clusters
   const total = paths.length;
   let loaded = 0;
@@ -3506,6 +3515,9 @@ async function peekCluster(id) {
   detailThumbCache = {};
   renderDetail(peeked);
   if (paths.length === 0) return;
+  // See selectCluster: skip the face-crop batch-load in Full-photo view — it would
+  // overwrite the cards' /api/photo/preview src back to face crops.
+  if (_faceView === 'full') return;
   const total = paths.length;
   let loaded = 0;
   if (total > 20) {

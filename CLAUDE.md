@@ -33,7 +33,8 @@ and lets the user review and correct the groupings in a browser UI.
 - **Active backend** controlled by `backend.json` → `{"backend": "openvino"}`
 - CPU backend DB: `faces.db`
 - OpenVINO backend DB: `faces_ov.db`
-- Thumbnails: `thumbs/` (CPU) or `thumbs_ov/` (OpenVINO)
+- Thumbnails (face crops): `thumbs/` (CPU) or `thumbs_ov/` (OpenVINO)
+- Full-photo previews (scene, ~1280px, on-demand cache): `previews/` or `previews_ov/`
 
 ### Data directory resolution (priority order)
 
@@ -67,6 +68,15 @@ scan_folders   : id, folder_path, added_at  ← in faces.db only (always the CPU
 - On Pause (`_scan_stop` event): final `cluster_faces()` then exits
 - CPU capped via `_apply_cpu_limit(cpu_percent)` — Windows Job Object HARD_CAP
 - I/O priority lowered via `THREAD_MODE_BACKGROUND_BEGIN` on the scan thread
+
+**ETA / throughput — `_RateWindow` (app.py), NOT a cumulative average.** Both scan loops
+report `eta_seconds` and `sec_per_img` from a **30 s sliding window** of `(time, done)`
+samples, never `done / total_elapsed`. Reason the lifetime average is wrong here and must
+not be reintroduced: (1) the pre-loop file-list diff on a 100k-photo archive is a large fixed
+cost baked into `t0` that the average amortises into every sample forever; (2) a re-scan
+alternates cheap hash-skips with expensive encodes, so lifetime speed is meaningless. Both
+make the naive ETA *grow* instead of counting down. The window self-anchors at the first
+sample (setup time never pollutes it) and reflects current speed, so the ETA converges.
 
 **Hash-duplicate handling:** when a file's hash matches an already-processed file, the
 scan does `INSERT OR IGNORE` for the new path — it must NOT `UPDATE` the existing record's
@@ -131,6 +141,7 @@ Committed immediately. Source cluster is kept (archived via `merged_into`) for h
 | `POST /api/clusters/first-faces` | Batch fetch one thumbnail per cluster |
 | `GET  /api/clusters/<id>/faces` | All faces in a cluster |
 | `POST /api/faces/<id>/move` | Move face to cluster |
+| `GET  /api/photo/preview/<photo_id>` | Cached medium (~1280px) JPEG of the whole source photo |
 | `GET  /api/scan/status` | SSE stream of scan progress |
 | `POST /api/scan/start` | Start scan |
 | `POST /api/scan/stop` | Pause scan (triggers cluster_faces on stop) |
@@ -151,12 +162,49 @@ Three tabs: **Scanner** (folders, scan settings, progress), **Review** (cluster 
 
 **Theming:** Single source of truth per theme — every theme-varying color is a CSS custom property defined exactly once in `:root` (dark) and once in `[data-theme="light"]` (light), at the top of `<style>`. All CSS rules reference these via `var(--…)` only; no hardcoded theme colors live outside the two variable blocks. To change a color in either theme, edit one line in one block. The Settings → Appearance card has a Light/Dark segmented toggle; the choice is persisted in `localStorage["novoface_theme"]` and applied via an inline `<head>` script before first paint to avoid flash.
 
+### Review — full-photo scene tools (the "who is this WITH?" workflow)
+
+The detail grid normally shows tight **face crops** (best for naming/merging). To judge a
+photo's *scene/composition* without opening an external viewer, three cooperating features —
+all backed by the cached `GET /api/photo/preview/<photo_id>` endpoint (one ~1280px JPEG per
+photo, generated on first request into `previews/` or `previews_ov/`, wiped by Reset Database):
+
+- **Hover preview** — resting the cursor on a face card shows a floating popover of the whole
+  source photo (`#hover-preview`, single reused element, `pointer-events:none`, edge-flip
+  positioning, ~350 ms delay). On a missing original the endpoint 404s and the popover shows a
+  "not found on disk — re-run a scan" placeholder instead of nothing (`img.onerror`). Action
+  hints live in a footer *inside* the popover — do NOT re-add a native `title=` tooltip to the
+  face card; it collided with the popover on hover (that's why it was removed).
+- **Size slider** — sets `--face-min` (grid column min-width); the `auto-fill` grid re-flows,
+  so resizing is one CSS-var change, no re-render. Range 65–165px is tuned so the small end
+  packs ~12/row (fast sweeping) and the large end ~5/row. Below `FACE_SIZE_COMPACT` (110) the
+  per-card date/age/path text is hidden (`.face-grid.compact`) for a contact-sheet look.
+  Column count is window-relative; a live "(N/row)" readout shows the actual count.
+  Persisted in `localStorage["novoface_face_size"]` (clamped to range on read/write).
+- **Face / Full-photo toggle** (`_faceView`) — Full mode swaps each card's `<img src>` to the
+  preview endpoint and adds `.face-grid.full-photo` (`object-fit:contain` on a 1/1 tile —
+  whole scene, letterboxed, nothing cropped). Persisted in `localStorage["novoface_face_view"]`.
+
+**Detail-header layout:** two `.hdr-group` flex clusters — **identity** (name/birth/group/
+Save/Merge) and **view** (View toggle + Size), split by a `border-left` divider (NOT
+`margin-left:auto`, which left a jarring void on wide screens). Row is `align-items:flex-end`
+with uniform 34px control heights — no `&nbsp;` label spacers. Both groups `flex-wrap` so the
+view group drops as a unit on narrow windows.
+
+**Refresh-after-scan:** on scan completion the Review pane must re-fetch, else the detail grid
+keeps rendering the stale cached `clusterFaces[]` (e.g. a face whose photo was just pruned).
+`loadClusters()` re-`selectCluster()`s the open cluster (piggybacking the existing "Please
+wait" overlay — one wait, not two); the scan `done` handler refreshes in place if Review is
+already the current tab, else sets `reviewNeedsRefresh` for the next tab switch.
+
 ### Key JS Functions
 
 | Function | Purpose |
 |---|---|
-| `loadClusters()` | Fetch cluster list + group data, rebuild sidebar |
+| `loadClusters()` | Fetch cluster list + group data, rebuild sidebar; re-selects open cluster so a post-scan refresh drops pruned faces |
 | `selectCluster(id)` | Load + render faces for a cluster |
+| `setFaceSize(px)` / `setFaceView(v)` | Persisted Review thumbnail size / face-vs-full-photo view |
+| `scheduleHoverPreview()` / `hideHoverPreview()` | Show/hide the full-photo hover popover |
 | `showMergeModal()` | Show sorted list of merge targets |
 | `doMerge(src, tgt)` | POST merge, refresh UI |
 | `loadStats()` | Update photo/face/cluster counts in header |
