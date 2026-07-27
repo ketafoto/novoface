@@ -1020,15 +1020,27 @@
   }
   .face-card:hover .sel-check, .face-card.selected .sel-check { opacity: 1; }
   .face-card.selected .sel-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  /* Sticks to the top of the scrolling .main so Export/Clear stay reachable while
+     scrolling a huge cluster. Full-bleed: negative side margins + matching padding
+     cancel .main's 24px side padding so the solid background spans the whole width
+     and grid photos don't peek past its edges as they scroll under it. */
   .face-select-bar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
     display: flex; align-items: center; gap: 12px;
-    padding: 4px 0 12px; font-size: 13px; color: var(--accent);
+    margin: 0 -24px;
+    padding: 10px 24px; font-size: 13px; color: var(--accent);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 4px 12px -6px var(--shadow-modal);
   }
   .face-select-bar button {
     padding: 3px 10px; font-size: 12px; border-radius: 5px;
     border: 1px solid var(--border-ctx); background: var(--bg-input); color: var(--text-2); cursor: pointer;
   }
   .face-select-bar button:hover { background: var(--bg-hover); }
+  .face-select-bar + .face-grid { margin-top: 14px; }
   .face-card img {
     width: 100%;
     aspect-ratio: 4/5;
@@ -1133,6 +1145,54 @@
     z-index: 200;
   }
   .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* Rich result toast (Export etc.): success/error colour, an action button, and a
+     manual close — it stays until dismissed so its action button is clickable
+     (the plain .toast is pointer-events:none and auto-hides, which the simple
+     status messages want but an actionable result does not). */
+  .result-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    max-width: 420px;
+    display: none;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    box-shadow: 0 12px 40px var(--shadow-modal);
+    z-index: 300;
+    font-size: 13px;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.25s, transform 0.25s;
+  }
+  .result-toast.show { display: flex; opacity: 1; transform: translateY(0); }
+  .result-toast.success { border-left: 4px solid var(--text-success); }
+  .result-toast.error   { border-left: 4px solid var(--text-danger); }
+  .result-toast .rt-icon { font-size: 18px; line-height: 1.2; flex-shrink: 0; }
+  .result-toast.success .rt-icon { color: var(--text-success); }
+  .result-toast.error   .rt-icon { color: var(--text-danger); }
+  .result-toast .rt-body { flex: 1; min-width: 0; }
+  .result-toast .rt-title { font-weight: 600; color: var(--text); margin-bottom: 3px; }
+  .result-toast .rt-detail { color: var(--text-2); line-height: 1.5; word-break: break-word; }
+  .result-toast .rt-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .result-toast .rt-actions button {
+    padding: 5px 12px; font-size: 12px; font-weight: 600;
+    border-radius: 6px; border: 1px solid var(--border-strong);
+    background: var(--bg-input); color: var(--text); cursor: pointer;
+  }
+  .result-toast .rt-actions button.primary {
+    background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+  }
+  .result-toast .rt-actions button:hover { filter: brightness(1.1); }
+  .result-toast .rt-close {
+    background: none; border: none; color: var(--text-muted); cursor: pointer;
+    font-size: 18px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+  }
+  .result-toast .rt-close:hover { color: var(--text); }
 
   /* ── Merge modal ── */
   .modal-overlay {
@@ -1705,6 +1765,15 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="result-toast" id="result-toast">
+  <span class="rt-icon"></span>
+  <div class="rt-body">
+    <div class="rt-title"></div>
+    <div class="rt-detail"></div>
+    <div class="rt-actions"></div>
+  </div>
+  <button class="rt-close" onclick="hideResultToast()" title="Dismiss">×</button>
+</div>
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1814,6 +1883,47 @@ function showToast(msg) {
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+let _resultToastTimer = null;
+// Rich, dismissible toast for operation results. `opts`: {type:'success'|'error',
+// title, detail, actions:[{label, onClick, primary}], autoHideMs}. Stays until
+// closed (or autoHideMs) so its action buttons remain clickable.
+function showResultToast({type = 'success', title = '', detail = '', actions = [], autoHideMs = 0}) {
+  const el = document.getElementById('result-toast');
+  clearTimeout(_resultToastTimer);
+  el.classList.remove('success', 'error');
+  el.classList.add(type);
+  el.querySelector('.rt-icon').textContent = type === 'error' ? '⚠' : '✓';
+  el.querySelector('.rt-title').textContent = title;
+  el.querySelector('.rt-detail').textContent = detail;
+  const actEl = el.querySelector('.rt-actions');
+  actEl.innerHTML = '';
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.textContent = a.label;
+    if (a.primary) b.className = 'primary';
+    b.onclick = a.onClick;
+    actEl.appendChild(b);
+  }
+  actEl.style.display = actions.length ? 'flex' : 'none';
+  el.classList.add('show');
+  if (autoHideMs > 0) _resultToastTimer = setTimeout(hideResultToast, autoHideMs);
+}
+
+function hideResultToast() {
+  clearTimeout(_resultToastTimer);
+  document.getElementById('result-toast').classList.remove('show');
+}
+
+async function openFolder(path) {
+  try {
+    const r = await fetch('/api/open-folder', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path}),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); showToast(d.error || 'Could not open folder'); }
+  } catch (e) { showToast('Could not open folder'); }
 }
 
 async function loadStats() {
@@ -3601,6 +3711,7 @@ function renderDetail(cluster) {
     </div>
     ${selectedFaces.size > 0 ? `<div class="face-select-bar">
       <span>${selectedFaces.size} selected — drag to a cluster to move</span>
+      <button onclick="exportSelected()">Export ${selectedFaces.size} to folder…</button>
       <button onclick="selectedFaces.clear();_lastSelectedIdx=-1;renderDetail()">Clear</button>
     </div>` : ''}
     <div class="face-grid${_faceSize < FACE_SIZE_COMPACT ? ' compact' : ''}${_faceView === 'full' ? ' full-photo' : ''}">`;
@@ -3743,6 +3854,61 @@ function toggleFaceSelect(event, faceId, idx) {
     _lastSelectedIdx = idx;
   }
   renderDetail();
+}
+
+// Export (copy) the selected photos to a folder on disk. Reuses the existing
+// multi-selection; the server opens a native folder picker and copies the
+// originals (keeping filenames, skipping name clashes).
+async function exportSelected() {
+  const ids = [...selectedFaces];
+  if (ids.length === 0) return;
+  let pick;
+  try {
+    const pr = await fetch('/api/pick-folder', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title: `Copy ${ids.length} selected photos to…`}),
+    });
+    pick = await pr.json();
+  } catch (e) {
+    showResultToast({type: 'error', title: 'Could not open the folder picker',
+      detail: String(e && e.message || e)});
+    return;
+  }
+  if (!pick || !pick.path) return;   // user cancelled the dialog
+
+  showToast(`Copying ${ids.length} photos…`);
+  try {
+    const r = await fetch('/api/faces/export', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({face_ids: ids, dest: pick.path}),
+    });
+    const res = await r.json();
+    if (!r.ok) {
+      showResultToast({type: 'error', title: 'Export failed',
+        detail: (res.error || `Server returned ${r.status}`) + ` — destination: ${pick.path}`});
+      return;
+    }
+    // Build a human summary of what happened.
+    const parts = [];
+    if (res.skipped) parts.push(`${res.skipped} skipped (already present)`);
+    if (res.missing) parts.push(`${res.missing} missing on disk`);
+    const extra = parts.length ? ` · ${parts.join(' · ')}` : '';
+    const noneCopied = res.copied === 0;
+    showResultToast({
+      type: noneCopied ? 'error' : 'success',
+      title: noneCopied
+        ? 'No files were copied'
+        : `${res.copied} file${res.copied === 1 ? '' : 's'} copied to`,
+      detail: (res.dest || pick.path) + extra,
+      actions: [{label: 'Open folder', primary: true,
+                 onClick: () => openFolder(res.dest || pick.path)}],
+    });
+  } catch (e) {
+    showResultToast({type: 'error', title: 'Export failed',
+      detail: String(e && e.message || e) + ` — destination: ${pick.path}`});
+  }
 }
 
 async function assignGroup() {

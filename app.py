@@ -1669,6 +1669,118 @@ def api_open_photo():
     return jsonify({"ok": True})
 
 
+@app.route("/api/open-folder", methods=["POST"])
+def api_open_folder():
+    """Open a folder in the system file manager (used by the Export result toast)."""
+    path = (request.json or {}).get("path", "").strip()
+    if not path:
+        return jsonify({"error": "path required"}), 400
+    if not Path(path).is_dir():
+        return jsonify({"error": "Folder not found"}), 404
+    import subprocess
+    if sys.platform == "win32":
+        # explorer.exe returns exit code 1 even on success, so don't check=True.
+        subprocess.Popen(["explorer", path])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+    return jsonify({"ok": True})
+
+
+def _pick_folder_dialog(title: str = "Select destination folder") -> str | None:
+    """Show a native 'choose folder' dialog and return the chosen path (or None if
+    cancelled).
+
+    Runs tkinter's askdirectory IN-PROCESS on a short-lived dedicated thread. It must
+    NOT be spawned as `subprocess.run([sys.executable, "-c", ...])`: in the frozen app
+    `sys.executable` is novoface.exe (not python), so that just launches a whole new
+    copy of the app instead of running the snippet. A fresh Tk() root created, run, and
+    destroyed entirely within one worker thread is self-contained and does not touch
+    the pywebview/WebView2 main loop. tkinter is bundled in the frozen build (already
+    used for the first-run dialogs), so this works both frozen and from `python app.py`.
+    """
+    result: dict[str, str | None] = {"path": None}
+
+    def _run():
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            p = filedialog.askdirectory(title=title, mustexist=True)
+            root.destroy()
+            result["path"] = p or None
+        except Exception:
+            _log.warning("Folder picker failed", exc_info=True)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=300)
+    return result["path"]
+
+
+@app.route("/api/pick-folder", methods=["POST"])
+def api_pick_folder():
+    """Open a native folder picker; return {path} or {path: null} if cancelled."""
+    title = (request.json or {}).get("title", "Select destination folder")
+    return jsonify({"path": _pick_folder_dialog(title)})
+
+
+@app.route("/api/faces/export", methods=["POST"])
+def api_export_faces():
+    """Copy the ORIGINAL photos backing the given faces into a destination folder.
+
+    Body: {"face_ids": [...], "dest": "C:\\..."}.  Files keep their original names;
+    an existing file with the same name is SKIPPED (never overwritten). Faces are
+    de-duplicated down to unique photos first (a photo can back more than one face),
+    so each source file is copied at most once.
+    Returns {copied, skipped, missing} counts.
+    """
+    import shutil
+    data = request.json or {}
+    face_ids = data.get("face_ids") or []
+    dest = (data.get("dest") or "").strip()
+    if not face_ids:
+        return jsonify({"error": "No faces selected"}), 400
+    if not dest:
+        return jsonify({"error": "No destination folder"}), 400
+    dest_dir = Path(dest)
+    if not dest_dir.is_dir():
+        return jsonify({"error": "Destination folder does not exist"}), 400
+
+    conn = get_db()
+    ph = ",".join("?" * len(face_ids))
+    rows = conn.execute(
+        f"SELECT DISTINCT p.file_path FROM faces f "
+        f"JOIN photos p ON p.id = f.photo_id WHERE f.id IN ({ph})",
+        [int(x) for x in face_ids],
+    ).fetchall()
+    conn.close()
+
+    copied = skipped = missing = 0
+    for (src_path,) in rows:
+        src = Path(src_path)
+        if not src.is_file():
+            missing += 1
+            continue
+        target = dest_dir / src.name
+        if target.exists():
+            skipped += 1
+            continue
+        try:
+            shutil.copy2(str(src), str(target))
+            copied += 1
+        except Exception:
+            _log.warning("Export copy failed: %s -> %s", src, target, exc_info=True)
+            missing += 1
+    _log.info("Exported %d photos to %s (%d skipped, %d missing/failed)",
+              copied, dest_dir, skipped, missing)
+    return jsonify({"copied": copied, "skipped": skipped, "missing": missing,
+                    "dest": str(dest_dir)})
+
+
 @app.route("/api/version")
 def api_version():
     return jsonify({"version": __version__})
