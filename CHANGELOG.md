@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.0] — 2026-07-28
+
+### Added
+- **Full-photo hover preview in Review** — resting the cursor on a face thumbnail shows a floating preview of the whole source photo, so you can read the scene without opening the photo in an external viewer. If the original file was moved or deleted, the preview shows a clear "not found on disk" note suggesting a re-scan.
+- **Thumbnail size slider in the Review detail pane** — resize face thumbnails from small (about 12 per row, for fast visual scanning) to large (about 5 per row), with a live "(N/row)" readout. Below a threshold the per-photo text is hidden for a compact contact-sheet layout. Your choice is remembered across sessions.
+- **Face / Full-photo view toggle in Review** — switch the whole detail grid between tight face crops (best for naming and merging people) and the full source photos (best for finding shots with a particular composition, e.g. a person together with others). Full photos are shown whole (letterboxed), never cropped. Remembered across sessions.
+- **Export selected photos to a folder** — pick any photos in a cluster (checkbox, Shift-click range, Ctrl-click) and copy the originals to a folder of your choice in one step, without opening each in a "Save as" dialog. A native folder picker opens at your last-used destination; files keep their names and existing files are skipped, never overwritten. A result banner reports how many were copied and offers to open the folder. The selection bar stays pinned to the top while you scroll a large cluster, so Export is always within reach.
+- **Settings are now remembered between sessions** in the desktop app — your theme (light/dark), thumbnail size, Face/Full view, and last export folder now persist across app restarts and reinstalls.
+
+### Changed
+- **Faster, cleaner Review after a scan** — when a scan finishes, the Review pane now refreshes automatically so photos removed during the scan (files deleted or moved off disk) disappear right away, instead of lingering until you manually reopened the person.
+- **Review detail header redesigned** — the person/scan controls and the new view controls are now organized into two clearly separated groups on a single, compact aligned row, replacing the previously cramped layout.
+- Full-photo previews are cached on first view (per backend) for instant repeat display, and are cleared by Reset Database along with thumbnails.
+
+### Fixed
+- **Scan time estimate (ETA) is now accurate.** The remaining-time estimate previously grew larger the longer a scan ran (it counted slow start-up work and, on re-scans, already-known files against the average speed). It now reflects the current processing speed over a recent window, so it counts down sensibly toward zero.
+- **Desktop app no longer forgot your settings on restart.** Theme, thumbnail size, and view choices were saved but discarded every time the app closed; they now stick.
+- **Full-photo view no longer reverts to face crops** while scrolling a large cluster.
+
+### Also includes the earlier 1.0.2 maintenance work
+- Fixes for packaged-app scan crashes (numpy/scipy/matplotlib), anti-virus-throttled install/uninstall slowness, and stale-path pruning; the build is now pinned to the curated `venv-win` environment. *(Shipped in the 1.0.2 tag; folded in here for users upgrading directly from 1.0.1 or earlier.)*
+
+---
+
 ## [1.0.2] — 2026-07-01
 
 ### Changed
@@ -79,5 +103,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[1.1.0]: https://github.com/ketafoto/novoface/releases/tag/v1.1.0
+[1.0.2]: https://github.com/ketafoto/novoface/releases/tag/v1.0.2
 [1.0.1]: https://github.com/ketafoto/novoface/releases/tag/v1.0.1
 [1.0.0]: https://github.com/ketafoto/novoface/releases/tag/v1.0.0
