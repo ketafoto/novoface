@@ -1688,9 +1688,10 @@ def api_open_folder():
     return jsonify({"ok": True})
 
 
-def _pick_folder_dialog(title: str = "Select destination folder") -> str | None:
+def _pick_folder_dialog(title: str = "Select destination folder",
+                        initial_dir: str = "") -> str | None:
     """Show a native 'choose folder' dialog and return the chosen path (or None if
-    cancelled).
+    cancelled). `initial_dir` (if a real folder) is where the dialog opens.
 
     Runs tkinter's askdirectory IN-PROCESS on a short-lived dedicated thread. It must
     NOT be spawned as `subprocess.run([sys.executable, "-c", ...])`: in the frozen app
@@ -1701,6 +1702,9 @@ def _pick_folder_dialog(title: str = "Select destination folder") -> str | None:
     used for the first-run dialogs), so this works both frozen and from `python app.py`.
     """
     result: dict[str, str | None] = {"path": None}
+    # Only pass initialdir if it still exists — a stale/removed path makes the dialog
+    # silently open at an unexpected place on some platforms.
+    start_dir = initial_dir if initial_dir and Path(initial_dir).is_dir() else ""
 
     def _run():
         try:
@@ -1709,7 +1713,10 @@ def _pick_folder_dialog(title: str = "Select destination folder") -> str | None:
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
-            p = filedialog.askdirectory(title=title, mustexist=True)
+            kwargs = {"title": title, "mustexist": True}
+            if start_dir:
+                kwargs["initialdir"] = start_dir
+            p = filedialog.askdirectory(**kwargs)
             root.destroy()
             result["path"] = p or None
         except Exception:
@@ -1724,8 +1731,10 @@ def _pick_folder_dialog(title: str = "Select destination folder") -> str | None:
 @app.route("/api/pick-folder", methods=["POST"])
 def api_pick_folder():
     """Open a native folder picker; return {path} or {path: null} if cancelled."""
-    title = (request.json or {}).get("title", "Select destination folder")
-    return jsonify({"path": _pick_folder_dialog(title)})
+    data = request.json or {}
+    title = data.get("title", "Select destination folder")
+    initial_dir = (data.get("initial_dir") or "").strip()
+    return jsonify({"path": _pick_folder_dialog(title, initial_dir)})
 
 
 @app.route("/api/faces/export", methods=["POST"])

@@ -590,7 +590,21 @@ def main() -> None:
         height=900,
         min_size=(900, 600),
     )
-    webview.start()
+    # Persist the WebView2 profile so UI prefs saved to localStorage (theme, thumbnail
+    # size, etc.) survive an app restart. pywebview defaults to private_mode=True, an
+    # in-memory profile that WIPES localStorage on every exit — which is why settings
+    # never stuck in the packaged app. storage_path lives under the app data dir so it
+    # is co-located with the DB and removed on uninstall. Fall back to the default
+    # (ephemeral) start if the profile dir can't be used, so the app still launches.
+    storage_path = str(DATA_DIR / "webview")
+    try:
+        os.makedirs(storage_path, exist_ok=True)
+        webview.start(private_mode=False, storage_path=storage_path)
+    except Exception:
+        logging.warning("Persistent webview storage unavailable (%s); "
+                        "settings will not persist this session", storage_path,
+                        exc_info=True)
+        webview.start()
 
     # ── Graceful shutdown after window close ──────────────────────────────
     # webview.start() has returned — the window is gone.  Signal any running

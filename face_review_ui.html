@@ -3862,12 +3862,15 @@ function toggleFaceSelect(event, faceId, idx) {
 async function exportSelected() {
   const ids = [...selectedFaces];
   if (ids.length === 0) return;
+  // Pre-open the picker at the last folder used, so repeated exports are one click.
+  const lastDir = localStorage.getItem('novoface_export_dir') || '';
   let pick;
   try {
     const pr = await fetch('/api/pick-folder', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({title: `Copy ${ids.length} selected photos to…`}),
+      body: JSON.stringify({title: `Copy ${ids.length} selected photos to…`,
+                            initial_dir: lastDir}),
     });
     pick = await pr.json();
   } catch (e) {
@@ -3890,6 +3893,8 @@ async function exportSelected() {
         detail: (res.error || `Server returned ${r.status}`) + ` — destination: ${pick.path}`});
       return;
     }
+    // Remember this destination so the next export's picker opens here.
+    try { localStorage.setItem('novoface_export_dir', res.dest || pick.path); } catch (e) {}
     // Build a human summary of what happened.
     const parts = [];
     if (res.skipped) parts.push(`${res.skipped} skipped (already present)`);
